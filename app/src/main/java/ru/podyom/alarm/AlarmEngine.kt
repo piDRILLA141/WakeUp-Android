@@ -10,14 +10,18 @@ import java.time.*
 import java.util.UUID
 
 /** Single-process serialized coordinator; Room, not an Activity, owns every occurrence. */
-class AlarmEngine(private val app: App, private val clock: () -> Long = System::currentTimeMillis) {
+class AlarmEngine(private val app: App, private val clock: () -> Long = System::currentTimeMillis, private val elapsed: () -> Long = android.os.SystemClock::elapsedRealtime) {
     private val mutex = Mutex()
     private val db get() = app.runtime
     private val dao get() = db.dao()
     private fun now() = clock()
+    private fun bootCount() = android.provider.Settings.Global.getInt(app.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0)
     private suspend fun runs() = dao.runs().map { it.model() }
     private suspend fun put(previous: AlarmRun?, next: AlarmRun, reason: String = next.state.name) {
-        dao.putRun(next.row())
+        val anchored = if (next.needsEvent && next.state != RunState.SCHEDULED) next.copy(
+            eventElapsed = if (previous?.eventAt == next.eventAt && previous.bootCount == bootCount() && previous.eventElapsed > 0) previous.eventElapsed
+                else elapsed() + (next.eventAt - now()), bootCount = bootCount()) else next.copy(eventElapsed = 0)
+        dao.putRun(anchored.row())
         if (previous?.state != next.state || reason != next.state.name) dao.event(EventRow(runId = next.id, at = now(), type = reason))
     }
     private suspend fun create(plan: AlarmPlan, at: Long) {
@@ -31,7 +35,11 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                 if (run.needsEvent) app.scheduler.schedule(run)
                 else if (recoverSound && run.sounding) app.scheduler.schedule(run, now() + 1000)
                 dao.diagnostic(run.id, "")
-            } catch (e: Exception) { dao.diagnostic(run.id, "Не удалось запланировать: ${e.javaClass.simpleName}") }
+            } catch (e: Exception) {
+                val message = "Не удалось запланировать: ${e.javaClass.simpleName}"
+                dao.diagnostic(run.id, message)
+                AlarmNotifications.failure(app, message)
+            }
         }
         AlarmNotifications.refreshChecks(app, after)
     }
@@ -53,6 +61,8 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
             if (saved.enabled) create(saved, testAt ?: Schedule.next(saved, Instant.ofEpochMilli(now()), ZoneId.systemDefault()).toEpochMilli())
         }
         reconcile(before)
+        val failure = dao.runs().firstOrNull { it.alarmId == saved.id && it.state == RunState.SCHEDULED.name && it.diagnostic.isNotEmpty() }
+        check(failure == null) { failure!!.diagnostic }
     }
     suspend fun enable(id: String, enabled: Boolean) = mutex.withLock {
         if (enabled) check(app.scheduler.allowed()) { "Нет разрешения на точные будильники" }
@@ -106,6 +116,14 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         val before = runs()
         db.withTransaction {
             if (recalculate) {
+                // A manually changed wall clock must not turn a three-minute check into an hour.
+                before.filter { it.needsEvent && it.state != RunState.SCHEDULED && it.bootCount == bootCount() && it.eventElapsed > 0 }.forEach { run ->
+                    val rebased = now() + (run.eventElapsed - elapsed()).coerceAtLeast(0)
+                    val delta = rebased - run.eventAt
+                    val updated = run.copy(eventAt = rebased, deadline = if(run.deadline > 0) run.deadline + delta else 0,
+                        version = run.version + 1, updatedAt = now())
+                    put(run, updated, "CLOCK_REBASED")
+                }
                 before.filter { it.state == RunState.SCHEDULED }.forEach { put(it, WakeMachine.cancel(it, now()), "CLOCK_CHANGED") }
             }
             // Keep overdue occurrences. They are delivered immediately after reboot, not silently rolled to tomorrow.

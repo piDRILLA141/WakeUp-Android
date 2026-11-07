@@ -31,8 +31,9 @@ import java.time.format.DateTimeFormatter
     var emergency by rememberSaveable {mutableStateOf(false)}
     var phrase by rememberSaveable {mutableStateOf("")}
     val context=LocalContext.current
+    var unlockRevision by remember {mutableIntStateOf(0)}
     var private by remember(id) {mutableStateOf<PrivateAlarm?>(null)}
-    LaunchedEffect(run?.plan?.privateKey) {run?.let {private=vm.profile(it.plan.privateKey)}}
+    LaunchedEffect(run?.plan?.privateKey,unlockRevision) {run?.let {private=vm.profile(it.plan.privateKey)}}
     LaunchedEffect(Unit) {while(true) {now=System.currentTimeMillis();delay(250)}} // Display only. Deadline is a persisted system alarm.
     BackHandler {onClose()} // Leaving the screen never changes the durable state.
     Surface(Modifier.fillMaxSize()) { Column(Modifier.fillMaxSize().systemBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp),verticalArrangement=Arrangement.spacedBy(18.dp)) {
@@ -42,7 +43,7 @@ import java.time.format.DateTimeFormatter
         if(run==null) {Text("Загрузка состояния…"); TextButton(onClick=onClose) {Text("Закрыть экран")};return@Column}
         if(private==null) {
             Text("После перезагрузки разблокируйте телефон для доступа к вашей фразе, коду и мелодии.")
-            Button(onClick={context.getSystemService(KeyguardManager::class.java).requestDismissKeyguard(context as ComponentActivity,object:KeyguardManager.KeyguardDismissCallback(){ override fun onDismissSucceeded(){onClose()} })}) {Text("Разблокировать")}
+            Button(onClick={context.getSystemService(KeyguardManager::class.java).requestDismissKeyguard(context as ComponentActivity,object:KeyguardManager.KeyguardDismissCallback(){ override fun onDismissSucceeded(){unlockRevision++} })}) {Text("Разблокировать")}
         }
         when(run.state) {
             RunState.RINGING,RunState.RE_RINGING -> {
@@ -90,11 +91,12 @@ import java.time.format.DateTimeFormatter
 }
 @Composable private fun MemoryPanel(seed:Int,spec:MissionSpec,onAnswer:(String)->Unit) {
     val sequence=remember(seed){Missions.memory(seed,spec.grid,spec.length)}
-    var showing by remember(seed){mutableStateOf(true)}
+    var showing by rememberSaveable(seed){mutableStateOf(true)}
     var highlighted by remember(seed){mutableIntStateOf(-1)}
     var entered by rememberSaveable(seed){mutableStateOf("")}
-    var replay by remember(seed){mutableIntStateOf(0)}
-    LaunchedEffect(seed,replay) {showing=true;entered="";delay(400);for(tile in sequence){highlighted=tile;delay(600);highlighted=-1;delay(250)};showing=false}
+    var replay by rememberSaveable(seed){mutableIntStateOf(0)}
+    var shownReplay by rememberSaveable(seed){mutableIntStateOf(-1)}
+    LaunchedEffect(seed,replay) {if(shownReplay!=replay){showing=true;entered="";delay(400);for(tile in sequence){highlighted=tile;delay(600);highlighted=-1;delay(250)};showing=false;shownReplay=replay}}
     Text(if(showing) "Запомните порядок подсветки" else "Повторите последовательность")
     Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
         repeat(spec.grid){ row -> Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) { repeat(spec.grid){ col -> val index=row*spec.grid+col

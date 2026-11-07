@@ -1,5 +1,6 @@
 package ru.podyom.ui
 
+import androidx.core.net.toUri
 import android.content.Intent
 import android.media.MediaPlayer
 import android.media.RingtoneManager
@@ -11,6 +12,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Remove
+import kotlin.math.roundToInt
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -64,7 +68,7 @@ import ru.podyom.missions.CodeScanner
                 item { HorizontalDivider(); Text("Сигнал", style = MaterialTheme.typography.titleLarge) }
                 item { Text(if(private.soundUri.isEmpty()) "Встроенная мелодия «Рассвет»" else "Выбрана пользовательская мелодия"); FlowRow { TextButton(onClick = { profile(private.copy(soundUri = "")) }) { Text("Рассвет") }; TextButton(onClick = { systemPicker.launch(Intent(RingtoneManager.ACTION_RINGTONE_PICKER).putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM).putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)) }) { Text("Системные") }; TextButton(onClick = { filePicker.launch(arrayOf("audio/*")) }) { Text("Из файла") }; TextButton(onClick = {
                     if(player != null) { player?.release(); player = null } else try {
-                        val uri = private.soundUri.takeIf { it.isNotBlank() }?.let(Uri::parse) ?: Uri.parse("android.resource://${context.packageName}/${ru.podyom.R.raw.dawn}")
+                        val uri = private.soundUri.takeIf { it.isNotBlank() }?.let(Uri::parse) ?: "android.resource://${context.packageName}/${ru.podyom.R.raw.dawn}".toUri()
                         player = MediaPlayer().apply { setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ALARM).build()); setDataSource(context,uri); prepare(); setVolume(p.volume,p.volume); start(); setOnCompletionListener { it.release(); player=null } }
                     } catch (_: Exception) { player?.release(); player=null; error="Мелодия недоступна. При звонке будет использован «Рассвет»" }
                 }) { Text(if(player == null) "Прослушать" else "Остановить") } } }
@@ -98,8 +102,18 @@ import ru.podyom.missions.CodeScanner
     }
 }
 @Composable fun NumberSetting(label: String, value: Int, range: IntRange, onChange: (Int) -> Unit) {
-    var text by remember(value) { mutableStateOf(value.toString()) }
-    OutlinedTextField(text, { text=it.take(5); it.toIntOrNull()?.takeIf { n -> n in range }?.let(onChange) }, label={Text(label)},
-        supportingText={Text("${range.first}–${range.last}")}, isError=text.toIntOrNull() !in range, singleLine=true,
-        keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Number), modifier=Modifier.fillMaxWidth())
+    Column {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            IconButton(onClick = { onChange(value - 1) }, enabled = value > range.first) {
+                Icon(Icons.Outlined.Remove, "Уменьшить: $label")
+            }
+            Text(value.toString(), style = MaterialTheme.typography.titleLarge)
+            IconButton(onClick = { onChange(value + 1) }, enabled = value < range.last) {
+                Icon(Icons.Outlined.Add, "Увеличить: $label")
+            }
+        }
+        Slider(value.toFloat(), { onChange(it.roundToInt().coerceIn(range)) }, valueRange = range.first.toFloat()..range.last.toFloat())
+    }
 }

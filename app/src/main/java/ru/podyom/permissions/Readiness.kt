@@ -1,5 +1,6 @@
 package ru.podyom.permissions
 
+import androidx.core.net.toUri
 import android.Manifest
 import android.app.NotificationManager
 import android.content.*
@@ -38,8 +39,8 @@ import ru.podyom.app
     val audio = context.getSystemService(AudioManager::class.java)
     val audible = remember(revision) { audio.getStreamVolume(AudioManager.STREAM_ALARM) > 0 }
     fun open(action: String, data: Boolean = false) {
-        val intent = Intent(action).apply { if (data) this.data = Uri.parse("package:${context.packageName}") }
-        try { context.startActivity(intent) } catch (_: ActivityNotFoundException) { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) }
+        val intent = Intent(action).apply { if (data) this.data = "package:${context.packageName}".toUri() }
+        try { context.startActivity(intent) } catch (_: ActivityNotFoundException) { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri())) }
     }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Проверка готовности будильника", style = MaterialTheme.typography.headlineSmall)
@@ -47,7 +48,7 @@ import ru.podyom.app
             if (Build.VERSION.SDK_INT >= 33 && !notifications) request.launch(Manifest.permission.POST_NOTIFICATIONS)
             else context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
         }
-        ReadyRow("Точные будильники", exact, "Системное расписание работает при закрытом приложении") { open(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, true) }
+        ReadyRow("Точные будильники", exact, "Системное расписание работает при закрытом приложении") { if (Build.VERSION.SDK_INT >= 31) open(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, true) else open(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true) }
         ReadyRow("Полноэкранный показ", full, "Android решает, открыть экран звонка или показать уведомление") { if(Build.VERSION.SDK_INT >= 34) open(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, true) else open(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true) }
         ReadyRow("Энергосбережение", battery, "Проверьте ограничения фоновой работы") { open(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS) }
         ReadyRow("Громкость будильника", audible, "Не беспокоить и Bluetooth требуют отдельной проверки") { open(Settings.ACTION_SOUND_SETTINGS) }
@@ -66,4 +67,16 @@ import ru.podyom.app
         Text(detail, style = MaterialTheme.typography.bodySmall)
         TextButton(onClick = onClick) { Text("Открыть настройки") }
     } }
+}
+
+fun readinessProblems(context: Context): List<String> = buildList {
+    val manager = context.getSystemService(NotificationManager::class.java)
+    if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) add("Уведомления выключены")
+    if (!context.app.scheduler.allowed()) add("Точное расписание недоступно")
+    if (Build.VERSION.SDK_INT >= 34 && !manager.canUseFullScreenIntent()) add("Полноэкранный показ запрещён: звонок доступен через уведомление")
+    if (listOf(ru.podyom.alarm.AlarmNotifications.RING, ru.podyom.alarm.AlarmNotifications.CHECK).any {
+        (manager.getNotificationChannel(it)?.importance ?: NotificationManager.IMPORTANCE_HIGH) < NotificationManager.IMPORTANCE_HIGH
+    }) add("Важность уведомлений звонка или проверки понижена")
+    if (context.getSystemService(AudioManager::class.java).getStreamVolume(AudioManager.STREAM_ALARM) == 0) add("Системная громкость будильника равна нулю")
+    if (manager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL) add("Включён режим «Не беспокоить»: проверьте, разрешены ли будильники")
 }

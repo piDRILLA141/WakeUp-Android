@@ -6,6 +6,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.map
 
 private val Context.preferences by preferencesDataStore("settings")
+@kotlinx.serialization.Serializable
 data class AppSettings(val light: Boolean = false, val clock24: Boolean = true, val readySeen: Boolean = false)
 class SettingsStore(private val context: Context) {
     private val light = booleanPreferencesKey("light")

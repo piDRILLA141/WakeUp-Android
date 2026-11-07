@@ -1,5 +1,6 @@
 package ru.podyom.alarm
 
+import androidx.core.net.toUri
 import android.app.*
 import android.content.*
 import android.net.Uri
@@ -12,7 +13,7 @@ class AlarmScheduler(private val context: Context) {
     fun allowed() = Build.VERSION.SDK_INT < 31 || manager.canScheduleExactAlarms()
     private fun pending(run: AlarmRun) = PendingIntent.getBroadcast(context, 0,
         Intent(context, AlarmReceiver::class.java).setAction("ru.podyom.EVENT")
-            .setData(Uri.parse("podyom://run/${run.id}/${run.version}"))
+            .setData("podyom://run/${run.id}/${run.version}".toUri())
             .putExtra("runId", run.id).putExtra("version", run.version), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
     fun schedule(run: AlarmRun, at: Long = run.eventAt) {
         check(allowed()) { "Нет разрешения на точные будильники" }

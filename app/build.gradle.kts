@@ -22,6 +22,9 @@ android {
     testOptions {
         unitTests.isIncludeAndroidResources = true
         unitTests.all {
+            // Robolectric Android 16 accesses FileDescriptor through this JDK 21 internal bridge.
+            it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
+            it.systemProperty("user.home", rootProject.layout.projectDirectory.dir(".gradle/test-home").asFile.apply { mkdirs() }.absolutePath)
             it.systemProperty("robolectric.dependency.repo.url", "https://repo.maven.apache.org/maven2")
             listOf("http.proxyHost", "http.proxyPort", "https.proxyHost", "https.proxyPort", "javax.net.ssl.trustStore").forEach { key ->
                 System.getProperty(key)?.let { value -> it.systemProperty(key, value) }
@@ -56,6 +59,8 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("androidx.test:core:1.7.0")
+    testImplementation(platform("androidx.compose:compose-bom:2025.10.01"))
+    testImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation(platform("androidx.compose:compose-bom:2025.10.01"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

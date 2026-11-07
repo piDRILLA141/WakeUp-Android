@@ -1,5 +1,6 @@
 package ru.podyom.ringing
 
+import androidx.core.net.toUri
 import android.content.Context
 import android.media.*
 import android.net.Uri
@@ -35,7 +36,7 @@ class AlarmAudio(private val context: Context, private val scope: CoroutineScope
                 prepare(); setVolume(0f, 0f); start()
             } catch (e: Exception) { release(); throw e }
         }
-        val fallback = Uri.parse("android.resource://${context.packageName}/${R.raw.dawn}")
+        val fallback = "android.resource://${context.packageName}/${R.raw.dawn}".toUri()
         player = try { load(privateAlarm?.soundUri?.takeIf { it.isNotEmpty() }?.let(Uri::parse) ?: fallback) }
         catch (_: Exception) { try { load(fallback) } catch (_: Exception) { AlarmNotifications.failure(context, "Ошибка воспроизведения встроенного сигнала"); null } }
         player?.setOnErrorListener { _, _, _ -> AlarmNotifications.failure(context, "Воспроизведение прервано. Откройте звонок"); false }

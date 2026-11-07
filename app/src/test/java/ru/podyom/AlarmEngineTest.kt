@@ -21,10 +21,10 @@ class AlarmEngineTest {
     private lateinit var engine: AlarmEngine
     private var clock = System.currentTimeMillis()
     @Before fun setup() {
-        app = RuntimeEnvironment.getApplication()
+        app = RuntimeEnvironment.getApplication() as App
         Shadows.shadowOf(app.getSystemService(UserManager::class.java)).setUserUnlocked(true)
-        Shadows.shadowOf(app.getSystemService(AlarmManager::class.java)).setCanScheduleExactAlarms(true)
-        engine = AlarmEngine(app) { clock }
+        org.robolectric.shadows.ShadowAlarmManager.setCanScheduleExactAlarms(true)
+        engine = AlarmEngine(app, clock = { clock })
     }
     @After fun close() { app.runtime.close(); if(app.unlocked) app.privateDb.close() }
     private suspend fun runs() = app.runtime.dao().runs().map {it.model()}
@@ -63,7 +63,7 @@ class AlarmEngineTest {
         val reopened=RuntimeDatabase.open(app)
         assertEquals(saved,reopened.dao().run(r.id)!!.model());reopened.close()
         app.scheduler.cancel(saved)
-        AlarmEngine(app) {clock}.restore()
+        AlarmEngine(app, clock = {clock}).restore()
         assertEquals(saved.eventAt,app.getSystemService(AlarmManager::class.java).nextAlarmClock.triggerTime)
         clock=saved.eventAt;engine.event(saved.id,saved.version)
         engine.update(r.id) {a,t->WakeMachine.confirm(a,t,false)}
@@ -98,8 +98,20 @@ class AlarmEngineTest {
         Shadows.shadowOf(app.getSystemService(UserManager::class.java)).setUserUnlocked(true)
     }
     @Test fun missingExactPermissionCannotPretendToSaveEnabledAlarm() = runBlocking {
-        Shadows.shadowOf(app.getSystemService(AlarmManager::class.java)).setCanScheduleExactAlarms(false)
+        org.robolectric.shadows.ShadowAlarmManager.setCanScheduleExactAlarms(false)
         try {engine.save(plan(),PrivateAlarm());fail("Must reject enabled alarm")} catch (_:IllegalStateException) { }
         assertTrue(runs().isEmpty())
     }
+    @Test fun manualClockChangeKeepsWakeDelayMonotonic() = runBlocking {
+        var monotonic=10_000L
+        val timed=AlarmEngine(app, {clock}, {monotonic})
+        timed.save(plan(),PrivateAlarm(),clock+1000); val r=runs().single();clock+=1000;monotonic+=1000
+        timed.event(r.id,0);timed.update(r.id,WakeMachine::startMission)
+        timed.update(r.id) {a,t->WakeMachine.progress(a,a.version,t)}
+        monotonic+=60_000;clock-=3_600_000
+        timed.restore(recalculate=true)
+        val rebased=runs().first {it.id==r.id}
+        assertEquals(120_000L,rebased.eventAt-clock)
+    }
+
 }

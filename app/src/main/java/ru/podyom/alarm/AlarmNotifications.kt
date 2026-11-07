@@ -1,5 +1,6 @@
 package ru.podyom.alarm
 
+import androidx.core.net.toUri
 import android.app.*
 import android.content.*
 import android.net.Uri
@@ -26,10 +27,10 @@ object AlarmNotifications {
         ))
     }
     fun activity(context: Context, id: String) = PendingIntent.getActivity(context, 0,
-        Intent(context, RingingActivity::class.java).setData(Uri.parse("podyom://screen/$id"))
+        Intent(context, RingingActivity::class.java).setData("podyom://screen/$id".toUri())
             .putExtra("runId", id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        if (Build.VERSION.SDK_INT >= 35) ActivityOptions.makeBasic().setPendingIntentCreatorBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED).toBundle() else null)
+        if (Build.VERSION.SDK_INT >= 35) ActivityOptions.makeBasic().setPendingIntentCreatorBackgroundActivityStartMode(if (Build.VERSION.SDK_INT >= 36) ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS else ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED).toBundle() else null)
     fun ringing(context: Context, run: AlarmRun? = null, title: String = "Подъём") =
         NotificationCompat.Builder(context, RING).setSmallIcon(R.drawable.ic_alarm)
             .setContentTitle(title).setContentText(if (run == null) "Подготовка звонка…" else "Пора вставать · нажмите, чтобы выполнить задание")
@@ -46,7 +47,7 @@ object AlarmNotifications {
             val builder = NotificationCompat.Builder(context, if (active) CHECK else STATUS)
                 .setSmallIcon(R.drawable.ic_alarm).setOngoing(true).setCategory(NotificationCompat.CATEGORY_ALARM)
                 .setContentTitle(if (active) "Ты точно проснулся?" else if (r.state == RunState.SNOOZED) "Будильник отложен" else "Проверка пробуждения запланирована")
-                .setContentText(if (active) "Подтверди, что ты не уснул снова" else "Следующее событие в ${java.text.SimpleDateFormat("HH:mm", java.util.Locale("ru")).format(java.util.Date(r.eventAt))}")
+                .setContentText(if (active) "Подтверди, что ты не уснул снова" else "Следующее событие в ${java.text.SimpleDateFormat("HH:mm", java.util.Locale.forLanguageTag("ru")).format(java.util.Date(r.eventAt))}")
                 .setContentIntent(activity(context, r.id)).setOnlyAlertOnce(true)
             if (active) builder.setFullScreenIntent(activity(context, r.id), true).setWhen(r.deadline).setUsesChronometer(true).setChronometerCountDown(true)
             try { manager.notify(r.id, 42, builder.build()) } catch (_: SecurityException) { }

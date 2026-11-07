@@ -79,6 +79,8 @@ import kotlinx.serialization.Serializable
     val emergency: Boolean = false,
     val missedChecks: Int = 0,
     val fallbackMath: Boolean = false,
+    val eventElapsed: Long = 0,
+    val bootCount: Int = -1,
 ) {
     val terminal get() = state == RunState.COMPLETED || state == RunState.CANCELLED
     val sounding get() = state in setOf(RunState.RINGING, RunState.MISSION_RUNNING, RunState.RE_RINGING)

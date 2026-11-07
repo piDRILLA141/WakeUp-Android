@@ -64,6 +64,13 @@ import java.util.UUID
                         val nearest = runs.filter { it.state == RunState.SCHEDULED }.minByOrNull { it.eventAt }
                         Text(nearest?.let { "Следующий будильник через ${duration(it.eventAt - now)}" } ?: "Время для нового утра", style = MaterialTheme.typography.bodyLarge)
                     }
+                    val readinessProblems = ru.podyom.permissions.readinessProblems(context)
+                    if (readinessProblems.isNotEmpty()) item {
+                        OutlinedCard(onClick = { readiness = true }) { Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                            Text("Проверьте готовность", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.titleMedium)
+                            Text(readinessProblems.joinToString("\n")); Text("Открыть проверку", color = MaterialTheme.colorScheme.primary)
+                        } }
+                    }
                     val diagnostics = rows.filter { it.diagnostic.isNotEmpty() }
                     if (diagnostics.isNotEmpty()) item { Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) { Text("Расписание требует внимания: ${diagnostics.first().diagnostic}", Modifier.padding(16.dp)) } }
                     if(runs.any { !it.terminal && it.state != RunState.SCHEDULED }) {
@@ -98,6 +105,7 @@ import java.util.UUID
                 2 -> {
                     item { Text("Твои пробуждения", style = MaterialTheme.typography.headlineLarge); Text("Статистика взаимодействий, а не оценка физиологического бодрствования.") }
                     item { var days by rememberSaveable { mutableIntStateOf(7) }; Row { listOf(7,30).forEach { n -> FilterChip(selected = days == n, onClick = { days=n }, label = { Text("$n дней") }, modifier = Modifier.padding(end=8.dp)) } }; val recent = runs.filter { it.firedAt >= now - days*86400000L && it.firedAt > 0 }; StatsCard(recent); MiniBars((days-1 downTo 0).map { back -> val d = LocalDate.now().minusDays(back.toLong()); recent.count { Instant.ofEpochMilli(it.firedAt).atZone(ZoneId.systemDefault()).toLocalDate() == d }.toFloat() }) }
+                    item { ru.podyom.statistics.WakeCalendar(runs) }
                     items(runs.filter { it.firedAt > 0 || it.state == RunState.CANCELLED }.sortedByDescending { it.updatedAt }.take(50), key={it.id}) { r -> Card { Column(Modifier.fillMaxWidth().padding(16.dp)) { Text(date(r.updatedAt)); Text(stateLabel(r.state)); Text("Повторы: ${r.cycle} · Отложено: ${r.snoozes} · Без ответа: ${r.missedChecks}", style = MaterialTheme.typography.bodySmall); if(r.emergency) Text("Аварийное завершение", color = MaterialTheme.colorScheme.tertiary) } } }
                 }
                 3 -> {
@@ -114,7 +122,13 @@ import java.util.UUID
             }
         }
     }
-    editor?.let { key -> val original = alarms.find { it.id == key }; AlarmEditor(original ?: AlarmPlan(UUID.randomUUID().toString()), original?.let { profiles[it.privateKey] } ?: PrivateAlarm(), onClose = { editor = null }, onSave = { p, private -> vm.save(p, private) { editor = null } }) }
+    editor?.let { key ->
+        val original = alarms.find { it.id == key }
+        // Stable draft identity: the one-second countdown must never reset a new editor.
+        val initialPlan = remember(key) { original ?: AlarmPlan(UUID.randomUUID().toString()) }
+        val initialProfile = remember(key) { original?.let { profiles[it.privateKey] } ?: PrivateAlarm() }
+        AlarmEditor(initialPlan, initialProfile, onClose = { editor = null }, onSave = { p, private -> vm.save(p, private) { editor = null } })
+    }
     confirm?.let { (text, action) -> AlertDialog(onDismissRequest = { confirm = null }, title = { Text("Подтвердите действие") }, text = { Text(text) }, confirmButton = { TextButton(onClick = { action(); confirm = null }) { Text("Подтвердить") } }, dismissButton = { TextButton(onClick = { confirm = null }) { Text("Отмена") } }) }
 }
 @Composable fun ToggleRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { Text(title, Modifier.weight(1f)); Switch(checked, onChange) } }
@@ -122,7 +136,7 @@ import java.util.UUID
     var menu by remember { mutableStateOf(false) }
     Card(onClick = edit, modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp)) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Text(LocalTime.of(plan.hour, plan.minute).format(DateTimeFormatter.ofPattern(if(clock24) "HH:mm" else "hh:mm a", java.util.Locale("ru"))), style = MaterialTheme.typography.displayMedium, modifier = Modifier.weight(1f), color = if(plan.enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(LocalTime.of(plan.hour, plan.minute).format(DateTimeFormatter.ofPattern(if(clock24) "HH:mm" else "hh:mm a", java.util.Locale.forLanguageTag("ru"))), style = MaterialTheme.typography.displayMedium, modifier = Modifier.weight(1f), color = if(plan.enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
             Switch(plan.enabled, toggle)
         }
         Text(profile.title, style = MaterialTheme.typography.titleMedium)
@@ -135,5 +149,5 @@ import java.util.UUID
 }
 @Composable private fun StatsCard(runs: List<AlarmRun>) { Card { Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("Сработало: ${runs.size}"); Text("Подтверждено: ${runs.count { it.state == RunState.COMPLETED && it.plan.wakeCheck }}"); Text("Повторных звонков: ${runs.sumOf { it.cycle }}"); Text("Откладываний: ${runs.sumOf { it.snoozes }}"); Text("Без ответа на проверку: ${runs.sumOf { it.missedChecks }}"); val times = runs.filter { it.missionFinishedAt > it.firedAt }.map { it.missionFinishedAt-it.firedAt }; Text("Среднее время до выполнения: ${if(times.isEmpty()) "нет данных" else duration(times.average().toLong())}") } } }
 @Composable private fun MiniBars(values: List<Float>) { val color = MaterialTheme.colorScheme.primary; Canvas(Modifier.fillMaxWidth().height(90.dp).padding(vertical=12.dp)) { if(values.isNotEmpty()) { val step = size.width/values.size; val max = (values.maxOrNull() ?: 1f).coerceAtLeast(1f); values.forEachIndexed { i, v -> drawLine(color, Offset(step*(i+.5f), size.height), Offset(step*(i+.5f), size.height*(1-v/max)), strokeWidth=step*.5f) } } } }
-fun date(millis: Long): String = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("d MMM · HH:mm", java.util.Locale("ru")))
+fun date(millis: Long): String = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("d MMM · HH:mm", java.util.Locale.forLanguageTag("ru")))
 fun stateLabel(s: RunState) = when(s) { RunState.SCHEDULED -> "Запланирован"; RunState.RINGING -> "Пора вставать"; RunState.MISSION_RUNNING -> "Задание выполняется"; RunState.WAITING_WAKE_CHECK -> "Проверка впереди"; RunState.WAKE_CHECK_ACTIVE -> "Ты точно проснулся?"; RunState.RE_RINGING -> "Повторный звонок"; RunState.SNOOZED -> "Отложен"; RunState.COMPLETED -> "Завершён"; RunState.CANCELLED -> "Отменён" }

@@ -26,7 +26,7 @@ import ru.podyom.core.*
     Column {
         Text(if(kind==MissionKind.SHAKE) "Несильно встряхивайте телефон. Держите его над безопасной поверхностью." else "Пройдите несколько шагов. Считаются только новые движения.")
         if(sensor==null || !registered) { Text("Датчик недоступен"); OutlinedButton(onClick=fallback) {Text("Заменить математикой")} }
-        else if(kind==MissionKind.STEPS && !permission) { Button(onClick={request.launch(Manifest.permission.ACTIVITY_RECOGNITION)}) {Text("Разрешить подсчёт шагов")}; TextButton(onClick=fallback) {Text("Выбрать математику")} }
+        else if(kind==MissionKind.STEPS && !permission) { Button(onClick={if(Build.VERSION.SDK_INT>=29) request.launch(Manifest.permission.ACTIVITY_RECOGNITION)}) {Text("Разрешить подсчёт шагов")}; TextButton(onClick=fallback) {Text("Выбрать математику")} }
     }
     DisposableEffect(kind,sensor,permission,owner) {
         val shake=ShakeDetector(); var steps=StepCounter()
