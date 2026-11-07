@@ -7,6 +7,27 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare source and documentation archives
+        run: |
+          mkdir -p "$RUNNER_TEMP/podyom/source" "$RUNNER_TEMP/podyom/guide/docs"
+          git archive --format=zip --output="$RUNNER_TEMP/podyom/source/podyom-source.zip" HEAD
+          cp README.md "$RUNNER_TEMP/podyom/guide/"
+          cp docs/*.md "$RUNNER_TEMP/podyom/guide/docs/"
+      - name: Upload source ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: podyom-source
+          path: ${{ runner.temp }}/podyom/source/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload installation and OriginOS guide
+        uses: actions/upload-artifact@v4
+        with:
+          name: podyom-guide
+          path: ${{ runner.temp }}/podyom/guide/
+          if-no-files-found: error
+          retention-days: 30
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -17,7 +38,11 @@ jobs:
           log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
       - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
-      - run: ./gradlew :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Build and verify
+        id: build
+        run: |
+          set -o pipefail
+          ./gradlew :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --console=plain 2>&1 | tee "$RUNNER_TEMP/podyom-build.log"
       - name: Prepare installable APK
         run: |
           mkdir -p dist
@@ -31,11 +56,16 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@v4
+      - name: Prepare verification reports
         if: always()
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+        run: python3 scripts/package-check-results.py "$RUNNER_TEMP/podyom/results" --build-outcome "$BUILD_OUTCOME" --build-log "$RUNNER_TEMP/podyom-build.log"
+      - name: Upload verification results
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: podyom-build
-          path: |
-            app/build/outputs/apk/
-            app/build/reports/
-            core/build/reports/tests/
+          name: podyom-check-results
+          path: ${{ runner.temp }}/podyom/results/
+          if-no-files-found: error
+          retention-days: 30
