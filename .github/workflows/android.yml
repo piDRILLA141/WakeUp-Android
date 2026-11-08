@@ -2,6 +2,7 @@ name: Android
 on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
+  actions: read
 jobs:
   verify:
     runs-on: ubuntu-24.04
@@ -38,8 +39,29 @@ jobs:
           log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
       - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Restore optional persistent signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PODYOM_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/podyom-signing.keystore"
+            chmod 600 "$RUNNER_TEMP/podyom-signing.keystore"
+            echo "PODYOM_KEYSTORE_PATH=$RUNNER_TEMP/podyom-signing.keystore" >> "$GITHUB_ENV"
+          fi
+      - name: Download previous 0.1.0 APK for certificate comparison
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: podyom-debug-apk
+          run-id: 42331207731
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/podyom/previous
       - name: Build and verify
         id: build
+        env:
+          PODYOM_KEYSTORE_PASSWORD: ${{ secrets.PODYOM_KEYSTORE_PASSWORD }}
+          PODYOM_KEY_ALIAS: ${{ secrets.PODYOM_KEY_ALIAS }}
+          PODYOM_KEY_PASSWORD: ${{ secrets.PODYOM_KEY_PASSWORD }}
         run: |
           set -o pipefail
           ./gradlew :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --console=plain 2>&1 | tee "$RUNNER_TEMP/podyom-build.log"
@@ -47,6 +69,10 @@ jobs:
         run: |
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk dist/podyom-debug.apk
+          ./scripts/signing-report.sh dist/podyom-debug.apk "$RUNNER_TEMP/podyom/signing" "$RUNNER_TEMP/podyom/previous/podyom-debug.apk"
+          cp docs/UPGRADE_0.2.0.md "$RUNNER_TEMP/podyom/signing/"
+          cp "$RUNNER_TEMP/podyom/signing/SIGNING.md" dist/
+          cp docs/UPGRADE_0.2.0.md dist/
           cd dist
           sha256sum podyom-debug.apk > SHA256SUMS
       - name: Upload installable debug APK
@@ -60,7 +86,11 @@ jobs:
         if: always()
         env:
           BUILD_OUTCOME: ${{ steps.build.outcome }}
-        run: python3 scripts/package-check-results.py "$RUNNER_TEMP/podyom/results" --build-outcome "$BUILD_OUTCOME" --build-log "$RUNNER_TEMP/podyom-build.log"
+        run: |
+          python3 scripts/package-check-results.py "$RUNNER_TEMP/podyom/results" --build-outcome "$BUILD_OUTCOME" --build-log "$RUNNER_TEMP/podyom-build.log"
+          if [ -d "$RUNNER_TEMP/podyom/signing" ]; then
+            cp -r "$RUNNER_TEMP/podyom/signing" "$RUNNER_TEMP/podyom/results/"
+          fi
       - name: Upload verification results
         if: always()
         uses: actions/upload-artifact@v4
@@ -69,3 +99,6 @@ jobs:
           path: ${{ runner.temp }}/podyom/results/
           if-no-files-found: error
           retention-days: 30
+      - name: Remove private signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/podyom-signing.keystore"

@@ -59,6 +59,7 @@ summary = f"""# Результаты сборки и проверок «Подъ
 - [HTML тестов ядра](core-reports/tests/test/index.html).
 - [HTML Android/Compose-тестов](app-reports/tests/testDebugUnitTest/index.html).
 - [HTML Android Lint](app-reports/lint-results-debug.html).
+- Проверка подписи и совместимости обновления: [SIGNING.md](signing/SIGNING.md).
 - XML JUnit находится в `core-test-results` и `app-test-results`.
 
 Распакуйте ZIP целиком перед открытием HTML: стили и ресурсы находятся рядом.
