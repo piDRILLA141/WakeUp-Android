@@ -37,6 +37,7 @@ import ru.podyom.missions.CodeScanner
     val private = remember(privateJson) { codec.decodeFromString<PrivateAlarm>(privateJson) }
     fun profile(value: PrivateAlarm) { privateJson = codec.encodeToString(value) }
     var time by rememberSaveable { mutableStateOf("%02d:%02d".format(p.hour, p.minute)) }
+    var attemptedSave by remember {mutableStateOf(false)}
     var scan by rememberSaveable { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var saveConfirm by remember { mutableStateOf(false) }
@@ -51,9 +52,10 @@ import ru.podyom.missions.CodeScanner
         if(uri != null) profile(private.copy(soundUri = uri.toString()))
     }
     fun submit() {
+        attemptedSave=true
         try {
-            val parts = time.split(':'); require(parts.size == 2) { "Введите время в формате ЧЧ:ММ" }
-            val plan = p.copy(hour = parts[0].toInt(), minute = parts[1].toInt()); plan.validate()
+            val parsed = SmartTime.parse(time); time = SmartTime.normalize(time)
+            val plan = p.copy(hour = parsed.hour, minute = parsed.minute, oneShotAt = if(parsed.hour==initial.hour && parsed.minute==initial.minute) p.oneShotAt else null); plan.validate()
             require(private.phrase.isNotBlank()) { "Введите фразу" }
             require(plan.missions.none { it.kind == MissionKind.QR } || private.qr.isNotEmpty()) { "Зарегистрируйте QR-код" }
             onSave(plan, private)
@@ -62,9 +64,9 @@ import ru.podyom.missions.CodeScanner
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Scaffold(topBar = { TopAppBar(title = { Text("Твоё новое утро") }, navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, "Закрыть редактор") } }) }, bottomBar = { Surface { Button(onClick = { saveConfirm = true }, modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp)) { Text("Сохранить будильник") } } }) { inset ->
             LazyColumn(Modifier.fillMaxSize().padding(inset).imePadding(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                item { OutlinedTextField(time, { time = it.take(5) }, label = { Text("Время · ЧЧ:ММ") }, textStyle = MaterialTheme.typography.displayMedium, singleLine = true, modifier = Modifier.fillMaxWidth()) }
+                item { SmartTimeInput(time, { time = it;attemptedSave=false },showError=attemptedSave) }
                 item { OutlinedTextField(private.title, { profile(private.copy(title = it.take(100))) }, label = { Text("Название") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
-                item { Text("Повторение", style = MaterialTheme.typography.titleLarge); FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) { listOf("Пн","Вт","Ср","Чт","Пт","Сб","Вс").forEachIndexed { i, d -> FilterChip(p.days.contains(i+1), { change(p.copy(days = if(i+1 in p.days) p.days-(i+1) else p.days+(i+1))) }, label = { Text(d) }) } }; Text(if(p.days.isEmpty()) "Один раз" else "Каждую выбранную неделю", style = MaterialTheme.typography.bodySmall) }
+                if(!p.quick) item { Text("Повторение", style = MaterialTheme.typography.titleLarge); FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) { listOf("Пн","Вт","Ср","Чт","Пт","Сб","Вс").forEachIndexed { i, d -> FilterChip(p.days.contains(i+1), { change(p.copy(days = if(i+1 in p.days) p.days-(i+1) else p.days+(i+1), oneShotAt=null)) }, label = { Text(d) }) } }; Text(if(p.days.isEmpty()) "Один раз" else "Каждую выбранную неделю", style = MaterialTheme.typography.bodySmall) }
                 item { HorizontalDivider(); Text("Сигнал", style = MaterialTheme.typography.titleLarge) }
                 item { Text(if(private.soundUri.isEmpty()) "Встроенная мелодия «Рассвет»" else "Выбрана пользовательская мелодия"); FlowRow { TextButton(onClick = { profile(private.copy(soundUri = "")) }) { Text("Рассвет") }; TextButton(onClick = { systemPicker.launch(Intent(RingtoneManager.ACTION_RINGTONE_PICKER).putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM).putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)) }) { Text("Системные") }; TextButton(onClick = { filePicker.launch(arrayOf("audio/*")) }) { Text("Из файла") }; TextButton(onClick = {
                     if(player != null) { player?.release(); player = null } else try {
@@ -73,7 +75,7 @@ import ru.podyom.missions.CodeScanner
                     } catch (_: Exception) { player?.release(); player=null; error="Мелодия недоступна. При звонке будет использован «Рассвет»" }
                 }) { Text(if(player == null) "Прослушать" else "Остановить") } } }
                 item { Text("Уровень сигнала: ${(p.volume*100).toInt()}% от системной громкости"); Slider(p.volume, { change(p.copy(volume = it)) }, valueRange = .05f..1f); NumberSetting("Плавное усиление, секунд", p.rampSeconds, 0..120) { change(p.copy(rampSeconds=it)) }; ToggleRow("Вибрация", p.vibrate) { change(p.copy(vibrate=it)) }; ToggleRow("Приглушать во время задания", p.duckDuringMission) { change(p.copy(duckDuringMission=it)) } }
-                item { HorizontalDivider(); Text("Задания по порядку", style = MaterialTheme.typography.titleLarge); Text("От 1 до 5 заданий. Для недоступной камеры или датчика есть явная замена математикой.", style = MaterialTheme.typography.bodySmall) }
+                if(!p.quick) item { HorizontalDivider(); Text("Задания по порядку", style = MaterialTheme.typography.titleLarge); Text("От 1 до 5 заданий. Для недоступной камеры или датчика есть явная замена математикой.", style = MaterialTheme.typography.bodySmall) }
                 p.missions.forEachIndexed { index, m -> item(key="mission-$index") {
                     OutlinedCard { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Задание ${index+1}", style = MaterialTheme.typography.titleMedium)
@@ -85,13 +87,17 @@ import ru.podyom.missions.CodeScanner
                         if(p.missions.size>1) TextButton(onClick={change(p.copy(missions=p.missions.filterIndexed { i,_ -> i!=index }))}) { Text("Убрать задание") }
                     } }
                 } }
-                if(p.missions.size<5) item { OutlinedButton(onClick={change(p.copy(missions=p.missions+MissionSpec()))},modifier=Modifier.fillMaxWidth()) { Text("Добавить задание") } }
+                if(!p.quick && p.missions.size<5) item { OutlinedButton(onClick={change(p.copy(missions=p.missions+MissionSpec()))},modifier=Modifier.fillMaxWidth()) { Text("Добавить задание") } }
                 if(p.missions.any { it.kind == MissionKind.TEXT }) item { OutlinedTextField(private.phrase, {profile(private.copy(phrase=it.take(500)))},label={Text("Фраза для набора")}, modifier=Modifier.fillMaxWidth()) }
                 if(p.missions.any { it.kind == MissionKind.QR }) item { Button(onClick={scan=true}) { Text(if(private.qr.isEmpty()) "Зарегистрировать код камерой" else "Заменить зарегистрированный код") }; Text(if(private.qr.isEmpty()) "Код ещё не сохранён" else "Код сохранён локально. Другие коды не подойдут.") }
-                item { HorizontalDivider(); Text("Повторно не засну", style=MaterialTheme.typography.titleLarge); ToggleRow("Проверить, что я проснулся",p.wakeCheck) {change(p.copy(wakeCheck=it))} }
+                if(!p.quick) item { HorizontalDivider(); Text("Повторно не засну", style=MaterialTheme.typography.titleLarge); ToggleRow("Проверить, что я проснулся",p.wakeCheck) {change(p.copy(wakeCheck=it))} }
                 if(p.wakeCheck) {
                     item { Text("Задержка после задания"); FlowRow(horizontalArrangement=Arrangement.spacedBy(4.dp)) { listOf(1,3,5,10,15,20).forEach { minutes -> FilterChip(p.wakeDelaySeconds==minutes*60,{change(p.copy(wakeDelaySeconds=minutes*60))}, label={Text("$minutes мин")}) } }; NumberSetting("Своя задержка, минут",p.wakeDelaySeconds/60,1..1440) {change(p.copy(wakeDelaySeconds=it*60))} }
                     item { Text("Время на ответ"); FlowRow(horizontalArrangement=Arrangement.spacedBy(4.dp)) { listOf(30,60,100,120).forEach { seconds -> FilterChip(p.confirmSeconds==seconds,{change(p.copy(confirmSeconds=seconds))},label={Text("$seconds с")}) } }; ToggleRow("Усиленная проверка · пример",p.strictCheck) {change(p.copy(strictCheck=it))}; NumberSetting("Контрольных проверок",p.checkCount,1..3) {change(p.copy(checkCount=it))}; if(p.checkCount>1) NumberSetting("Между проверками, минут",p.laterCheckSeconds/60,1..1440) {change(p.copy(laterCheckSeconds=it*60))}; Text("Если ответа нет, сигнал зазвонит снова. После задания цикл продолжится.",style=MaterialTheme.typography.bodySmall) }
+                }
+                if(p.quick) item {
+                    Text("Быстрый будильник отключается обычным подтверждением, без заданий и проверки пробуждения.")
+                    OutlinedButton(onClick={change(p.copy(quick=false,missions=listOf(MissionSpec()),wakeCheck=true))}) {Text("Добавить задания и проверку")}
                 }
                 item { HorizontalDivider(); Text("Отложить",style=MaterialTheme.typography.titleLarge); NumberSetting("Максимум откладываний · 0 = выключено",p.snoozeLimit,0..10) {change(p.copy(snoozeLimit=it))}; NumberSetting("Интервал, минут",p.snoozeSeconds/60,1..60) {change(p.copy(snoozeSeconds=it*60))} }
                 error?.let { item { Text(it,color=MaterialTheme.colorScheme.error) } }

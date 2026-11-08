@@ -19,7 +19,7 @@ object WakeMachine {
     private fun rerun(r: AlarmRun) = r.copy(state = RunState.RE_RINGING, cycle = r.cycle + 1,
         missedChecks = r.missedChecks + 1, missionIndex = 0, progress = 0, fallbackMath = false, deadline = 0)
     fun startMission(r: AlarmRun, now: Long): AlarmRun =
-        if (r.state in setOf(RunState.RINGING, RunState.RE_RINGING)) r.copy(state = RunState.MISSION_RUNNING).changed(now) else r
+        if (!r.plan.quick && r.state in setOf(RunState.RINGING, RunState.RE_RINGING)) r.copy(state = RunState.MISSION_RUNNING).changed(now) else r
     fun fallback(r: AlarmRun, now: Long): AlarmRun =
         if (r.state == RunState.MISSION_RUNNING) r.copy(fallbackMath = true, progress = 0).changed(now) else r
     fun progress(r: AlarmRun, token: Int, now: Long): AlarmRun {
@@ -36,6 +36,8 @@ object WakeMachine {
             checkIndex = r.checkIndex + 1, deadline = 0, eventAt = now + r.plan.laterCheckSeconds * 1000L).changed(now)
         else r.copy(state = RunState.COMPLETED, deadline = 0).changed(now)
     }
+    fun dismissQuick(r: AlarmRun, now: Long): AlarmRun =
+        if(r.plan.quick && r.sounding) r.copy(state=RunState.COMPLETED).changed(now) else r
     fun snooze(r: AlarmRun, now: Long): AlarmRun {
         if (!r.sounding || r.snoozes >= r.plan.snoozeLimit) return r
         return r.copy(state = RunState.SNOOZED, snoozes = r.snoozes + 1, missionIndex = 0, progress = 0,

@@ -15,16 +15,12 @@ class RingingViewModel(application: Application):AndroidViewModel(application) {
     val message=MutableStateFlow("")
     private fun action(block:suspend()->Unit) {viewModelScope.launch {try {block()} catch(e:Exception) {if(e is CancellationException) throw e;message.value=e.message?:"Ошибка действия"}}}
     suspend fun profile(key:String)=app.engine.profile(key)
+    fun dismissQuick(id:String)=action {app.engine.update(id,WakeMachine::dismissQuick)}
     fun start(id:String)=action {app.engine.update(id,WakeMachine::startMission)}
     fun fallback(id:String)=action {app.engine.update(id,WakeMachine::fallback)}
     fun snooze(id:String)=action {app.engine.update(id,WakeMachine::snooze)}
     fun cancel(id:String)=action {app.engine.update(id) {r,t->WakeMachine.cancel(r,t,true)}}
-    fun confirm(id:String,answer:String)=action {app.engine.update(id) {r,t->
-        val ok=Missions.math(r.seed+r.checkIndex+r.cycle,1).answer==answer.toIntOrNull()
-        val next=WakeMachine.confirm(r,t,ok)
-        if(next==r) message.value=if(t>=r.deadline) "Время подтверждения истекло" else "Проверьте ответ"
-        next
-    }}
+    fun confirm(id:String,answer:String)=action {app.engine.confirmCheck(id,answer);message.value=""}
     fun answer(id:String,token:Int,value:String)=action {
         val snapshot=app.runtime.dao().run(id)?.model()?:return@action
         val private=app.engine.profile(snapshot.plan.privateKey)

@@ -74,7 +74,7 @@ fun readinessProblems(context: Context): List<String> = buildList {
     if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) add("Уведомления выключены")
     if (!context.app.scheduler.allowed()) add("Точное расписание недоступно")
     if (Build.VERSION.SDK_INT >= 34 && !manager.canUseFullScreenIntent()) add("Полноэкранный показ запрещён: звонок доступен через уведомление")
-    if (listOf(ru.podyom.alarm.AlarmNotifications.RING, ru.podyom.alarm.AlarmNotifications.CHECK).any {
+    if (listOf(ru.podyom.alarm.AlarmNotifications.RING, if(ru.podyom.data.enhancedChecks(context)) ru.podyom.alarm.AlarmNotifications.ENHANCED_CHECK else ru.podyom.alarm.AlarmNotifications.CHECK).any {
         (manager.getNotificationChannel(it)?.importance ?: NotificationManager.IMPORTANCE_HIGH) < NotificationManager.IMPORTANCE_HIGH
     }) add("Важность уведомлений звонка или проверки понижена")
     if (context.getSystemService(AudioManager::class.java).getStreamVolume(AudioManager.STREAM_ALARM) == 0) add("Системная громкость будильника равна нулю")

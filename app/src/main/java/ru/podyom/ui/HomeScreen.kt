@@ -64,6 +64,9 @@ import java.util.UUID
                         val nearest = runs.filter { it.state == RunState.SCHEDULED }.minByOrNull { it.eventAt }
                         Text(nearest?.let { "Следующий будильник через ${duration(it.eventAt - now)}" } ?: "Время для нового утра", style = MaterialTheme.typography.bodyLarge)
                     }
+                    item { FilledTonalButton(onClick=vm::quick, modifier=Modifier.fillMaxWidth()) {
+                        Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(8.dp)); Text("Через 20 минут")
+                    } }
                     val readinessProblems = ru.podyom.permissions.readinessProblems(context)
                     if (readinessProblems.isNotEmpty()) item {
                         OutlinedCard(onClick = { readiness = true }) { Column(Modifier.fillMaxWidth().padding(16.dp)) {
@@ -111,6 +114,8 @@ import java.util.UUID
                 3 -> {
                     item { Text("Как тебе удобно", style = MaterialTheme.typography.headlineLarge) }
                     item { ToggleRow("Светлая тема", settings.light, vm::light); ToggleRow("24-часовой формат", settings.clock24, vm::clock24) }
+                    item { ru.podyom.permissions.WakeCheckSettings(settings.enhancedCheck,vm::enhanced) }
+                    item { ru.podyom.permissions.ScheduleDiagnostics(runs, rows) }
                     item { Text("Язык: русский\nКнопки громкости: системное управление потоком будильника", style = MaterialTheme.typography.bodyMedium) }
                     item { Button(onClick = { readiness = true }, modifier = Modifier.fillMaxWidth()) { Text("Проверка разрешений") } }
                     item { OutlinedButton(onClick = { vm.test() }, modifier = Modifier.fillMaxWidth()) { Text("Будильник через 10 секунд") } }
@@ -130,11 +135,12 @@ import java.util.UUID
         AlarmEditor(initialPlan, initialProfile, onClose = { editor = null }, onSave = { p, private -> vm.save(p, private) { editor = null } })
     }
     confirm?.let { (text, action) -> AlertDialog(onDismissRequest = { confirm = null }, title = { Text("Подтвердите действие") }, text = { Text(text) }, confirmButton = { TextButton(onClick = { action(); confirm = null }) { Text("Подтвердить") } }, dismissButton = { TextButton(onClick = { confirm = null }) { Text("Отмена") } }) }
+    ru.podyom.wakecheck.ActiveWakeCheckHost(runs,vm::confirmCheck,vm::cancelCheck)
 }
 @Composable fun ToggleRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { Text(title, Modifier.weight(1f)); Switch(checked, onChange) } }
 @Composable private fun AlarmCard(plan: AlarmPlan, profile: PrivateAlarm, clock24: Boolean, edit: () -> Unit, toggle: (Boolean) -> Unit, duplicate: () -> Unit, skip: () -> Unit, delete: () -> Unit) {
     var menu by remember { mutableStateOf(false) }
-    Card(onClick = edit, modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(20.dp)) {
+    Card(onClick = edit, modifier = Modifier.fillMaxWidth(), colors=CardDefaults.cardColors(containerColor=if(plan.enabled) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow)) { Column(Modifier.padding(16.dp)) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Text(LocalTime.of(plan.hour, plan.minute).format(DateTimeFormatter.ofPattern(if(clock24) "HH:mm" else "hh:mm a", java.util.Locale.forLanguageTag("ru"))), style = MaterialTheme.typography.displayMedium, modifier = Modifier.weight(1f), color = if(plan.enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
             Switch(plan.enabled, toggle)
@@ -142,8 +148,8 @@ import java.util.UUID
         Text(profile.title, style = MaterialTheme.typography.titleMedium)
         Text(if(plan.days.isEmpty()) "Один раз" else plan.days.sorted().joinToString(" · ") { listOf("Пн","Вт","Ср","Чт","Пт","Сб","Вс")[it-1] }, color = MaterialTheme.colorScheme.primary)
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Text(plan.missions.joinToString(" → ") { it.kind.title } + if(plan.wakeCheck) " · Проверка пробуждения" else "", style = MaterialTheme.typography.bodySmall, modifier=Modifier.weight(1f))
-            Box { IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Действия будильника") }; DropdownMenu(menu, { menu = false }) { DropdownMenuItem(text = { Text("Дублировать") }, onClick = { menu=false; duplicate() }); DropdownMenuItem(text = { Text("Пропустить следующий") }, onClick = { menu=false; skip() }, enabled = plan.enabled); DropdownMenuItem(text = { Text("Удалить") }, onClick = { menu=false; delete() }) } }
+            Text((if(plan.quick) "Обычное подтверждение" else plan.missions.joinToString(" → ") { it.kind.title }) + if(plan.wakeCheck) " · Проверка пробуждения" else "", style = MaterialTheme.typography.bodySmall, modifier=Modifier.weight(1f))
+            Box { IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Действия будильника") }; DropdownMenu(menu, { menu = false }) { DropdownMenuItem(text = { Text("Дублировать на 10 минут позже") }, onClick = { menu=false; duplicate() }); DropdownMenuItem(text = { Text("Пропустить следующий") }, onClick = { menu=false; skip() }, enabled = plan.enabled); DropdownMenuItem(text = { Text("Удалить") }, onClick = { menu=false; delete() }) } }
         }
     } }
 }

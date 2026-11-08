@@ -37,7 +37,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun enabled(id: String, value: Boolean) = action { app.engine.enable(id, value) }
     fun delete(id: String) = action { app.engine.delete(id) }
     fun skip(id: String) = action { app.engine.skip(id) }
-    fun duplicate(plan: AlarmPlan, profile: PrivateAlarm) = action { app.engine.save(plan.copy(id = UUID.randomUUID().toString(), enabled = false), profile.copy(title = profile.title + " · копия")) }
+    fun duplicate(plan: AlarmPlan, profile: PrivateAlarm) = action {
+        val copy=app.engine.duplicateLater(plan.id)
+        messages.emit("Будильник добавлен на %02d:%02d".format(copy.hour,copy.minute))
+    }
+    fun quick() = action {
+        val plan=app.engine.quick() ?: return@action
+        messages.emit("Будильник «Через 20 минут» добавлен на " + java.time.Instant.ofEpochMilli(plan.oneShotAt!!).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")))
+    }
+    fun enhanced(value:Boolean)=action {app.settings.enhanced(value);app.engine.restore()}
+    fun confirmCheck(id:String,answer:String)=action {app.engine.confirmCheck(id,answer)}
+    fun cancelCheck(id:String)=action {app.engine.update(id) {r,t->WakeMachine.cancel(r,t,true)}}
     fun test(fast: Boolean = false) = action {
         val p = AlarmPlan(UUID.randomUUID().toString(), missions = listOf(MissionSpec(count = 1)), wakeDelaySeconds = if (fast) 10 else 180, confirmSeconds = if(fast) 10 else 100)
         app.engine.save(p, PrivateAlarm(title = if (fast) "Тест проверки пробуждения" else "Тест будильника"), System.currentTimeMillis() + 10_000)
@@ -67,7 +77,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         require(backup.version == 1 && backup.alarms.size <= 500) { "Неподдерживаемый формат" }
         backup.alarms.forEach { it.plan.validate(); require(it.profile.phrase.length in 1..500 && it.profile.title.length <= 100 && it.profile.qr.length <= 4096); require(it.plan.missions.none { m -> m.kind == MissionKind.QR } || it.profile.qr.isNotEmpty()) }
         backup.alarms.forEach { app.engine.save(it.plan.copy(id = UUID.randomUUID().toString(), enabled = false), it.profile.copy(soundUri = "")) }
-        app.settings.light(backup.settings.light); app.settings.clock24(backup.settings.clock24)
+        app.settings.light(backup.settings.light); app.settings.clock24(backup.settings.clock24); app.settings.enhanced(backup.settings.enhancedCheck)
         messages.emit("Импортировано ${backup.alarms.size}. Включите нужные будильники; мелодии выберите заново")
     }
 }

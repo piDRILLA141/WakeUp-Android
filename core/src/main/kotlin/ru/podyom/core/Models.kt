@@ -38,14 +38,18 @@ import kotlinx.serialization.Serializable
     val volume: Float = 0.8f,
     val rampSeconds: Int = 20,
     val duckDuringMission: Boolean = true,
+    val quick: Boolean = false,
+    val oneShotAt: Long? = null,
 ) {
     fun validate() {
         require(id.isNotBlank() && privateKey.isNotBlank())
         require(hour in 0..23 && minute in 0..59 && days.all { it in 1..7 })
-        require(missions.size in 1..5); missions.forEach { it.validate() }
+        require(if(quick) missions.isEmpty() && !wakeCheck else missions.size in 1..5); missions.forEach { it.validate() }
         require(wakeDelaySeconds in 5..86400 && confirmSeconds in 5..600)
         require(checkCount in 1..3 && laterCheckSeconds in 5..86400)
         require(snoozeSeconds in 10..3600 && snoozeLimit in 0..10)
+        require(oneShotAt == null || oneShotAt > 0)
+        require(!quick || days.isEmpty())
         require(volume in 0.05f..1f && rampSeconds in 0..120)
     }
 }

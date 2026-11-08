@@ -9,11 +9,12 @@ import ru.podyom.ringing.RingingService
 
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != "ru.podyom.EVENT") return
+        if (intent.action !in setOf("ru.podyom.EVENT","ru.podyom.CONFIRM_WAKE")) return
         val id = intent.getStringExtra("runId") ?: return
         try {
             ContextCompat.startForegroundService(context, Intent(context, RingingService::class.java)
-                .putExtra("runId", id).putExtra("version", intent.getIntExtra("version", -1)))
+                .putExtra("runId", id).putExtra("version", intent.getIntExtra("version", -1))
+                .putExtra("confirmWake",intent.action=="ru.podyom.CONFIRM_WAKE"))
         } catch (e: RuntimeException) {
             AlarmNotifications.failure(context, "Android запретил запуск звонка. Откройте приложение и проверьте разрешения.")
         }

@@ -47,8 +47,9 @@ import java.time.format.DateTimeFormatter
         }
         when(run.state) {
             RunState.RINGING,RunState.RE_RINGING -> {
-                Text(if(run.state==RunState.RE_RINGING) "Проверка осталась без ответа. Давай попробуем ещё раз." else "${run.plan.missions.size} заданий для бодрого старта")
-                Button(onClick={vm.start(id)},modifier=Modifier.fillMaxWidth().heightIn(min=56.dp)) {Text("Начать задание")}
+                Text(if(run.plan.quick) "Быстрый будильник · время вышло" else if(run.state==RunState.RE_RINGING) "Проверка осталась без ответа. Давай попробуем ещё раз." else "${run.plan.missions.size} заданий для бодрого старта")
+                if(run.plan.quick) Button(onClick={vm.dismissQuick(id)},modifier=Modifier.fillMaxWidth().heightIn(min=60.dp)) {Text("Выключить будильник")}
+                else Button(onClick={vm.start(id)},modifier=Modifier.fillMaxWidth().heightIn(min=56.dp)) {Text("Начать задание")}
             }
             RunState.MISSION_RUNNING -> {
                 Text("Задание ${run.missionIndex+1} из ${run.plan.missions.size} · ${run.mission.kind.title}",style=MaterialTheme.typography.titleLarge)
@@ -58,12 +59,7 @@ import java.time.format.DateTimeFormatter
             }
             RunState.WAITING_WAKE_CHECK -> {Text("Проверка впереди",style=MaterialTheme.typography.headlineSmall);Text("Вернёмся через ${duration(run.eventAt-now)}. Можно закрыть приложение — проверка сохранена в системном расписании.");OutlinedButton(onClick=onClose){Text("Продолжить утро")}}
             RunState.WAKE_CHECK_ACTIVE -> {
-                Text("Ты точно проснулся?",style=MaterialTheme.typography.headlineLarge)
-                Text("Подтверди, что ты не уснул снова")
-                Text("${((run.deadline-now).coerceAtLeast(0)+999)/1000} с",style=MaterialTheme.typography.displayMedium,color=MaterialTheme.colorScheme.primary)
-                var answer by rememberSaveable(id,run.checkIndex,run.cycle) {mutableStateOf("")}
-                if(run.plan.strictCheck) {Text(Missions.math(run.seed+run.checkIndex+run.cycle,1).text,style=MaterialTheme.typography.headlineMedium);OutlinedTextField(answer,{answer=it},label={Text("Ответ")},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Number))}
-                Button(onClick={vm.confirm(id,answer)},enabled=now<run.deadline,modifier=Modifier.fillMaxWidth().heightIn(min=56.dp)){Text("Да, я проснулся")}
+                ru.podyom.wakecheck.WakeCheckPanel(run,{answer->vm.confirm(id,answer)},{emergency=true})
             }
             RunState.SNOOZED -> {Text("Сигнал отложен на ${duration(run.eventAt-now)}");OutlinedButton(onClick=onClose){Text("Закрыть экран")}}
             RunState.COMPLETED,RunState.CANCELLED -> {Text(if(run.state==RunState.COMPLETED) "Хорошего тебе дня" else "Этот звонок завершён",style=MaterialTheme.typography.headlineLarge);Text("Следующее регулярное срабатывание остаётся в расписании.");Button(onClick=onClose){Text("Готово")}}
@@ -73,6 +69,7 @@ import java.time.format.DateTimeFormatter
         if(run.sounding && run.snoozes<run.plan.snoozeLimit) OutlinedButton(onClick={vm.snooze(id)},modifier=Modifier.fillMaxWidth()) {Text("Отложить · ${run.plan.snoozeSeconds/60} мин (${run.plan.snoozeLimit-run.snoozes} осталось)")}
         if(!run.terminal) TextButton(onClick={emergency=true}) {Text("Не могу выполнить · аварийное завершение")}
     } }
+    ru.podyom.wakecheck.ActiveWakeCheckHost(runs,{rid,answer->vm.confirm(rid,answer)},vm::cancel,excludeId=id)
     if(emergency) AlertDialog(onDismissRequest={emergency=false},title={Text("Завершить текущий звонок и проверки?")},text={Column {Text("Если вам плохо или задание недоступно, можно остановиться. Введите «ЗАВЕРШИТЬ». Случай сохранится в истории без штрафов.");OutlinedTextField(phrase,{phrase=it},label={Text("Подтверждение")})}},confirmButton={TextButton(onClick={vm.cancel(id);emergency=false},enabled=phrase.trim()=="ЗАВЕРШИТЬ"){Text("Завершить")}},dismissButton={TextButton(onClick={emergency=false}){Text("Вернуться")}})
 }
 @Composable private fun MissionPanel(run:AlarmRun,private:PrivateAlarm?,onAnswer:(String)->Unit,onMovement:(Int)->Unit,fallback:()->Unit) {

@@ -114,4 +114,55 @@ class AlarmEngineTest {
         assertEquals(120_000L,rebased.eventAt-clock)
     }
 
+    @Test fun duplicateRegistersNewActiveOccurrenceAndPreservesPrivateData() = runBlocking {
+        engine.save(plan().copy(hour=6,minute=30),PrivateAlarm(title="Школа",qr="own",phrase="Моя фраза"))
+        val original=app.runtime.dao().alarms().single().model()
+        val copy=engine.duplicateLater("a")
+        assertEquals(6,copy.hour);assertEquals(40,copy.minute);assertTrue(copy.enabled);assertNotEquals(original.id,copy.id)
+        assertEquals(original,app.runtime.dao().alarms().first {it.id=="a"}.model())
+        assertEquals(engine.profile(original.privateKey),engine.profile(app.runtime.dao().alarms().first {it.id==copy.id}.model().privateKey))
+        assertEquals(2,runs().count {it.state==RunState.SCHEDULED})
+        assertEquals(runs().filter {it.needsEvent}.minOf {it.eventAt},app.scheduler.nextSystemAlarm()!!.triggerTime)
+    }
+    @Test fun quickIsDebouncedSurvivesRestartAndDoesNotRepeat() = runBlocking {
+        val created=engine.quick()!!
+        assertNull(engine.quick());assertEquals(clock+1_200_000,created.oneShotAt)
+        assertEquals(1,runs().size)
+        val initial=runs().single();app.scheduler.cancel(initial)
+        AlarmEngine(app,clock={clock}).restore()
+        assertEquals(created.oneShotAt,app.scheduler.nextSystemAlarm()!!.triggerTime)
+        clock=created.oneShotAt!!;engine.event(initial.id,initial.version)
+        engine.update(initial.id,WakeMachine::dismissQuick)
+        assertEquals(RunState.COMPLETED,runs().single().state)
+        engine.restore();assertEquals(1,runs().size);assertNull(app.scheduler.nextSystemAlarm())
+    }
+    @Test fun quickTimerRebasesWallClockWithoutChangingElapsedDelay() = runBlocking {
+        var monotonic=10_000L
+        val timed=AlarmEngine(app,{clock},{monotonic})
+        timed.quick();monotonic+=60_000;clock-=3_600_000
+        timed.restore(recalculate=true)
+        val stored=runs().single()
+        assertEquals(1_140_000L,stored.eventAt-clock)
+        assertEquals(stored.eventAt,app.runtime.dao().alarms().single().model().oneShotAt)
+    }
+    @Test fun systemShowIntentPointsToOurScheduleAndDeletingOneKeepsOther() = runBlocking {
+        engine.save(plan("a"),PrivateAlarm(),clock+60_000)
+        engine.save(plan("b"),PrivateAlarm(),clock+120_000)
+        val show=app.scheduler.nextSystemAlarm()!!.showIntent
+        val intent=Shadows.shadowOf(show).savedIntent
+        assertEquals(android.provider.AlarmClock.ACTION_SHOW_ALARMS,intent.action)
+        assertEquals("ru.podyom.ui.MainActivity",intent.component!!.className)
+        engine.delete("a")
+        assertEquals(clock+120_000,app.scheduler.nextSystemAlarm()!!.triggerTime)
+    }
+    @Test fun oldJsonRowsRestoreWithoutSchemaChangeOrDataLoss() = runBlocking {
+        app.runtime.dao().putAlarm(AlarmRow("legacy","""{"id":"legacy","hour":6,"minute":40}"""))
+        app.privateDb.dao().putProfile(ProfileRow("legacy",codec.encodeToString(PrivateAlarm(title="Старый будильник"))))
+        engine.restore()
+        assertEquals("legacy",runs().single().plan.id);assertEquals(6,runs().single().plan.hour)
+        assertEquals("Старый будильник",engine.profile("legacy")!!.title)
+        val settings=codec.decodeFromString<AppSettings>("""{"light":true,"clock24":false,"readySeen":true}""")
+        assertTrue(settings.light);assertFalse(settings.clock24);assertFalse(settings.enhancedCheck)
+    }
+
 }

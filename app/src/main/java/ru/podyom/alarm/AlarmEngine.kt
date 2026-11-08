@@ -12,13 +12,14 @@ import java.util.UUID
 /** Single-process serialized coordinator; Room, not an Activity, owns every occurrence. */
 class AlarmEngine(private val app: App, private val clock: () -> Long = System::currentTimeMillis, private val elapsed: () -> Long = android.os.SystemClock::elapsedRealtime) {
     private val mutex = Mutex()
+    private var lastQuickAt = Long.MIN_VALUE
     private val db get() = app.runtime
     private val dao get() = db.dao()
     private fun now() = clock()
     private fun bootCount() = android.provider.Settings.Global.getInt(app.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0)
     private suspend fun runs() = dao.runs().map { it.model() }
     private suspend fun put(previous: AlarmRun?, next: AlarmRun, reason: String = next.state.name) {
-        val anchored = if (next.needsEvent && next.state != RunState.SCHEDULED) next.copy(
+        val anchored = if (next.needsEvent && (next.state != RunState.SCHEDULED || next.plan.quick)) next.copy(
             eventElapsed = if (previous?.eventAt == next.eventAt && previous.bootCount == bootCount() && previous.eventElapsed > 0) previous.eventElapsed
                 else elapsed() + (next.eventAt - now()), bootCount = bootCount()) else next.copy(eventElapsed = 0)
         dao.putRun(anchored.row())
@@ -64,6 +65,32 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         val failure = dao.runs().firstOrNull { it.alarmId == saved.id && it.state == RunState.SCHEDULED.name && it.diagnostic.isNotEmpty() }
         check(failure == null) { failure!!.diagnostic }
     }
+    suspend fun duplicateLater(id: String): AlarmPlan {
+        val original = mutex.withLock { dao.alarms().first { it.id == id }.model() }
+        val at = mutex.withLock { runs().firstOrNull { it.plan.id == id && it.state == RunState.SCHEDULED }?.scheduledAt }
+        val copy = AlarmShortcuts.copyForNext(original, UUID.randomUUID().toString(), Instant.ofEpochMilli(now()), ZoneId.systemDefault(),at)
+        save(copy, profile(original.privateKey) ?: error("Личные настройки недоступны: разблокируйте телефон"))
+        return copy
+    }
+    suspend fun quick(): AlarmPlan? {
+        val instant = mutex.withLock {
+            val time=now()
+            if(lastQuickAt != Long.MIN_VALUE && time-lastQuickAt in 0..1500) return null
+            lastQuickAt=time
+            Instant.ofEpochMilli(time)
+        }
+        val plan=AlarmShortcuts.quick(UUID.randomUUID().toString(),instant,ZoneId.systemDefault())
+        try { save(plan,PrivateAlarm(title="Через 20 минут"));return plan }
+        catch(e:Exception) { mutex.withLock {lastQuickAt=Long.MIN_VALUE};throw e }
+    }
+    suspend fun confirmCheck(id:String, answer:String="", expectedVersion:Int?=null) = update(id) { r,t ->
+        if(r.state!=RunState.WAKE_CHECK_ACTIVE) return@update r
+        check(expectedVersion==null || r.version==expectedVersion) {"Эта проверка уже изменилась"}
+        val passed = Missions.math(r.seed+r.checkIndex+r.cycle,1).answer == answer.toIntOrNull()
+        val changed = WakeMachine.confirm(r,t,passed)
+        check(changed!=r) {if(t>=r.deadline) "Время подтверждения истекло" else "Проверьте ответ"}
+        changed
+    }
     suspend fun enable(id: String, enabled: Boolean) = mutex.withLock {
         if (enabled) check(app.scheduler.allowed()) { "Нет разрешения на точные будильники" }
         val plan = dao.alarms().firstOrNull { it.id == id }?.model()?.copy(enabled = enabled) ?: return@withLock
@@ -73,6 +100,8 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
             before.filter { it.plan.id == id && it.state == RunState.SCHEDULED }.forEach { put(it, WakeMachine.cancel(it, now())) }
             if (enabled) create(plan, Schedule.next(plan, Instant.ofEpochMilli(now()), ZoneId.systemDefault()).toEpochMilli())
         }; reconcile(before)
+        val failure=dao.runs().firstOrNull {it.alarmId==id && it.state==RunState.SCHEDULED.name && it.diagnostic.isNotEmpty()}
+        check(failure==null) {failure!!.diagnostic}
     }
     suspend fun delete(id: String) = mutex.withLock {
         val before = runs()
@@ -117,14 +146,15 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         db.withTransaction {
             if (recalculate) {
                 // A manually changed wall clock must not turn a three-minute check into an hour.
-                before.filter { it.needsEvent && it.state != RunState.SCHEDULED && it.bootCount == bootCount() && it.eventElapsed > 0 }.forEach { run ->
+                before.filter { it.needsEvent && (it.state != RunState.SCHEDULED || it.plan.quick) && it.bootCount == bootCount() && it.eventElapsed > 0 }.forEach { run ->
                     val rebased = now() + (run.eventElapsed - elapsed()).coerceAtLeast(0)
                     val delta = rebased - run.eventAt
-                    val updated = run.copy(eventAt = rebased, deadline = if(run.deadline > 0) run.deadline + delta else 0,
+                    val updated = run.copy(plan=if(run.plan.quick) run.plan.copy(oneShotAt=rebased) else run.plan, eventAt = rebased, deadline = if(run.deadline > 0) run.deadline + delta else 0,
                         version = run.version + 1, updatedAt = now())
                     put(run, updated, "CLOCK_REBASED")
+                    if(run.plan.quick) dao.putAlarm(updated.plan.row())
                 }
-                before.filter { it.state == RunState.SCHEDULED }.forEach { put(it, WakeMachine.cancel(it, now()), "CLOCK_CHANGED") }
+                before.filter { it.state == RunState.SCHEDULED && !it.plan.quick }.forEach { put(it, WakeMachine.cancel(it, now()), "CLOCK_CHANGED") }
             }
             // Keep overdue occurrences. They are delivered immediately after reboot, not silently rolled to tomorrow.
             dao.alarms().map { it.model() }.filter { it.enabled }.forEach { plan ->
