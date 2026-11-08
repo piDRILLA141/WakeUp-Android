@@ -20,11 +20,13 @@ if [[ -n "$old_apk_path" && -f "$old_apk_path" ]]; then
     comparison="Сертификаты РАЗЛИЧАЮТСЯ: Android не разрешит обновление поверх этого APK. Не удаляйте установленное приложение. Сначала экспортируйте будильники и настройки; для совместимого обновления нужен исходный закрытый ключ."
   fi
 fi
+apk_bytes=$(stat -c '%s' "$apk_path")
 mode="временный debug-ключ текущего окружения; между GitHub runner ключ не сохраняется"
 if [[ -n "${PODYOM_KEYSTORE_PATH:-}" ]]; then mode="постоянный ключ из защищённых GitHub Secrets / указанного локального хранилища"; fi
 cat > "$report_path/SIGNING.md" <<REPORT
 # Подпись APK 0.2.0
 
+Размер APK: $apk_bytes байт.
 Режим: $mode.
 
 Новый сертификат SHA-256: $new_digest.

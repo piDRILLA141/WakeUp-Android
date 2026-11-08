@@ -56,6 +56,14 @@ jobs:
           run-id: 42331207731
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/podyom/previous
+      - name: Download first published 0.1.0 APK for comparison
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: podyom-debug-apk
+          run-id: 42329696055
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/podyom/first-published
       - name: Build and verify
         id: build
         env:
@@ -70,6 +78,9 @@ jobs:
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk dist/podyom-debug.apk
           ./scripts/signing-report.sh dist/podyom-debug.apk "$RUNNER_TEMP/podyom/signing" "$RUNNER_TEMP/podyom/previous/podyom-debug.apk"
+          ./scripts/signing-report.sh dist/podyom-debug.apk "$RUNNER_TEMP/podyom/signing/first-published" "$RUNNER_TEMP/podyom/first-published/podyom-debug.apk"
+          printf '\n# Дополнительно: первый опубликованный APK 0.1.0, запуск 42329696055\n\n' >> "$RUNNER_TEMP/podyom/signing/SIGNING.md"
+          cat "$RUNNER_TEMP/podyom/signing/first-published/SIGNING.md" >> "$RUNNER_TEMP/podyom/signing/SIGNING.md"
           cp docs/UPGRADE_0.2.0.md "$RUNNER_TEMP/podyom/signing/"
           cp "$RUNNER_TEMP/podyom/signing/SIGNING.md" dist/
           cp docs/UPGRADE_0.2.0.md dist/
