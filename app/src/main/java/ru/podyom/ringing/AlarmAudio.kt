@@ -32,6 +32,9 @@ class AlarmAudio(
     private val manager = context.getSystemService(AudioManager::class.java)
     private val vibrator = context.getSystemService(Vibrator::class.java)
     private val handler = Handler(Looper.getMainLooper())
+    private val preparationWakeLock = context.getSystemService(PowerManager::class.java)
+        .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "podyom:audio-recovery")
+        .apply { setReferenceCounted(false) }
     private val attributes = AudioAttributes.Builder()
         .setUsage(AudioAttributes.USAGE_ALARM)
         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -68,6 +71,7 @@ class AlarmAudio(
         owner = run
         source = profile?.soundUri?.takeIf { it.isNotEmpty() }?.let(Uri::parse)
         recovery = AudioRecovery()
+        keepAwakeForPreparation()
         try {
             manager.registerAudioDeviceCallback(routes, handler)
             routeRegistered = true
@@ -104,6 +108,7 @@ class AlarmAudio(
                 signal(AudioSignal.CALL_PAUSED)
                 suspendedForCall = true
                 releasePlayer()
+                releasePreparationWakeLock()
                 abandonFocus()
                 stopVibration()
             }
@@ -166,14 +171,17 @@ class AlarmAudio(
             AudioManager.AUDIOFOCUS_GAIN -> {
                 focused = Focus.HELD
                 signal(AudioSignal.FOCUS_GAINED)
+                tick()
             }
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT, AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
                 focused = Focus.TRANSIENT
                 releasePlayer()
+                releasePreparationWakeLock()
                 signal(AudioSignal.FOCUS_PAUSED)
             }
             AudioManager.AUDIOFOCUS_LOSS -> {
                 releasePlayer()
+                releasePreparationWakeLock()
                 abandonFocus()
                 focused = Focus.LOST
                 signal(AudioSignal.FOCUS_LOST)
@@ -182,6 +190,7 @@ class AlarmAudio(
     }
 
     private fun preparePlayer() {
+        keepAwakeForPreparation()
         val uri = if (recovery.useFallback) fallback else source ?: fallback
         try {
             val instance = MediaPlayer()
@@ -203,6 +212,7 @@ class AlarmAudio(
                     applyVolume()
                     if (player !== it) return@setOnPreparedListener
                     it.start()
+                    releasePreparationWakeLock()
                     signal(AudioSignal.PLAYBACK_STARTED)
                 } catch (_: RuntimeException) {
                     broken(AudioSignal.PLAYER_ERROR)
@@ -246,9 +256,12 @@ class AlarmAudio(
         releasePlayer()
         recovery = recovery.failed(canFallback = source != null)
         if (recovery.exhausted) {
+            releasePreparationWakeLock()
             abandonFocus()
             signal(AudioSignal.RECOVERY_EXHAUSTED)
         } else {
+            // The failed player may already have released its own wake lock.
+            keepAwakeForPreparation()
             retryAt = SystemClock.elapsedRealtime() + recovery.retryDelayMillis
             if (recovery.useFallback && recovery.failures == 1) signal(AudioSignal.USING_FALLBACK)
         }
@@ -270,6 +283,14 @@ class AlarmAudio(
         if (previous != null) runCatching { manager.abandonAudioFocusRequest(previous) }
     }
 
+    private fun keepAwakeForPreparation() {
+        preparationWakeLock.acquire(13_000)
+    }
+
+    private fun releasePreparationWakeLock() {
+        if (preparationWakeLock.isHeld) runCatching { preparationWakeLock.release() }
+    }
+
     private fun stopVibration() {
         if (vibrating) runCatching { vibrator.cancel() }
         vibrating = false
@@ -284,6 +305,7 @@ class AlarmAudio(
             runCatching { manager.unregisterAudioDeviceCallback(routes) }
         }
         releasePlayer()
+        releasePreparationWakeLock()
         abandonFocus()
         stopVibration()
         focused = Focus.NONE
