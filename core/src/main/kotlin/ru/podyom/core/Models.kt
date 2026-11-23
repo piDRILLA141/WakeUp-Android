@@ -40,6 +40,8 @@ import kotlinx.serialization.Serializable
     val duckDuringMission: Boolean = true,
     val quick: Boolean = false,
     val oneShotAt: Long? = null,
+    val skipEpochDays: Set<Long> = emptySet(),
+    val lastFiredEpochDay: Long? = null,
 ) {
     fun validate() {
         require(id.isNotBlank() && privateKey.isNotBlank())
@@ -49,6 +51,7 @@ import kotlinx.serialization.Serializable
         require(checkCount in 1..3 && laterCheckSeconds in 5..86400)
         require(snoozeSeconds in 10..3600 && snoozeLimit in 0..10)
         require(oneShotAt == null || oneShotAt > 0)
+        require(skipEpochDays.all { it in -365243219162L..365241780471L })
         require(!quick || days.isEmpty())
         require(volume in 0.05f..1f && rampSeconds in 0..120)
     }
@@ -85,6 +88,7 @@ import kotlinx.serialization.Serializable
     val fallbackMath: Boolean = false,
     val eventElapsed: Long = 0,
     val bootCount: Int = -1,
+    val ringingSince: Long? = null,
 ) {
     val terminal get() = state == RunState.COMPLETED || state == RunState.CANCELLED
     val sounding get() = state in setOf(RunState.RINGING, RunState.MISSION_RUNNING, RunState.RE_RINGING)

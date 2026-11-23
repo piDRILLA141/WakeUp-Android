@@ -2,6 +2,8 @@ package ru.podyom
 
 import android.app.AlarmManager
 import android.os.UserManager
+import java.time.*
+import java.time.temporal.TemporalAdjusters
 import kotlinx.coroutines.runBlocking
 import org.junit.*
 import org.junit.Assert.*
@@ -163,6 +165,150 @@ class AlarmEngineTest {
         assertEquals("Старый будильник",engine.profile("legacy")!!.title)
         val settings=codec.decodeFromString<AppSettings>("""{"light":true,"clock24":false,"readySeen":true}""")
         assertTrue(settings.light);assertFalse(settings.clock24);assertFalse(settings.enhancedCheck)
+    }
+
+    private val testZone = ZoneId.of("Europe/Moscow")
+
+    private fun monday(hour: Int): LocalDate {
+        val date = Instant.ofEpochMilli(clock).atZone(testZone).toLocalDate()
+            .with(TemporalAdjusters.next(DayOfWeek.MONDAY))
+        clock = date.atTime(hour, 0).atZone(testZone).toInstant().toEpochMilli()
+        return date
+    }
+
+    private fun instant(day: LocalDate, hour: Int, minute: Int = 0, zone: ZoneId = testZone) =
+        day.atTime(hour, minute).atZone(zone).toInstant().toEpochMilli()
+
+    private fun daily(id: String, minute: Int = 0) =
+        plan(id).copy(hour = 6, minute = minute, days = (1..7).toSet())
+
+    @Test fun bulkSkipRestoresAfterBootAndUndoRegistersTomorrowAgain() = runBlocking {
+        val date = monday(7)
+        val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })
+        val ids = (0..3).map { "alarm-$it" }.toSet()
+        ids.forEachIndexed { index, id ->
+            coordinator.save(daily(id, index * 10), PrivateAlarm(title = "Исходный"))
+        }
+        val prior = runs()
+        val result = coordinator.skipTomorrow(ids, allowOneShot = false)
+        assertEquals(4, result.changed)
+        assertTrue(runs().all { it.state == RunState.SCHEDULED &&
+            Instant.ofEpochMilli(it.eventAt).atZone(testZone).toLocalDate() == date.plusDays(2) })
+        assertTrue(prior.none { old -> runs().any { it.id == old.id } })
+        runs().forEach(app.scheduler::cancel)
+        AlarmEngine(app, clock = { clock }, zoneId = { testZone }).restore()
+        assertEquals(instant(date.plusDays(2), 6), app.scheduler.nextSystemAlarm()!!.triggerTime)
+        coordinator.undoSkip("alarm-0")
+        assertEquals(instant(date.plusDays(1), 6), app.scheduler.nextSystemAlarm()!!.triggerTime)
+        val persisted = app.runtime.dao().alarms().map { it.model() }
+        assertTrue(persisted.all { it.enabled })
+        assertEquals("Исходный", coordinator.profile(persisted.first().privateKey)!!.title)
+        assertEquals(3, persisted.count { date.plusDays(1).toEpochDay() in it.skipEpochDays })
+    }
+
+    @Test fun skipPreservesTodayAndReportsNonMatchingAlarms() = runBlocking {
+        val date = monday(5)
+        val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })
+        coordinator.save(daily("two").copy(days = setOf(1, 2)), PrivateAlarm())
+        coordinator.save(daily("weekend").copy(days = setOf(6, 7)), PrivateAlarm())
+        val today = runs().first { it.plan.id == "two" }
+        val result = coordinator.skipTomorrow(setOf("two", "weekend"), allowOneShot = false)
+        assertEquals(1, result.changed)
+        assertEquals(1, result.notScheduled)
+        assertEquals(today.id, runs().first { it.plan.id == "two" }.id)
+        clock = instant(date, 6)
+        coordinator.event(today.id, today.version)
+        assertEquals(instant(date.plusWeeks(1), 6), runs().single {
+            it.plan.id == "two" && it.state == RunState.SCHEDULED
+        }.eventAt)
+    }
+
+    @Test fun fridayWeekdaysAreUnaffectedAndOneShotRequiresConfirmation() = runBlocking {
+        val friday = monday(7).plusDays(4)
+        clock = instant(friday, 7)
+        val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })
+        coordinator.save(daily("weekdays").copy(days = (1..5).toSet()), PrivateAlarm())
+        coordinator.save(plan("single").copy(hour = 6), PrivateAlarm())
+        val old = runs()
+        assertTrue(runCatching { coordinator.skipTomorrow(setOf("weekdays", "single"), false) }.isFailure)
+        assertEquals(old.toSet(), runs().toSet())
+        val result = coordinator.skipTomorrow(setOf("weekdays", "single"), true)
+        assertEquals(1, result.changed)
+        assertEquals(1, result.notScheduled)
+        assertEquals(instant(friday.plusDays(3), 6), app.scheduler.nextSystemAlarm()!!.triggerTime)
+        coordinator.undoSkip("single")
+        assertEquals(instant(friday.plusDays(1), 6), app.scheduler.nextSystemAlarm()!!.triggerTime)
+    }
+
+    @Test fun failedRegistrationRollsBackEntireSelectionAndCancelsStagedIntent() = runBlocking {
+        val date = monday(7)
+        val initial = AlarmEngine(app, clock = { clock }, zoneId = { testZone })
+        initial.save(daily("a"), PrivateAlarm())
+        initial.save(daily("b", 10), PrivateAlarm())
+        val old = runs().toSet()
+        var registrations = 0
+        val failing = AlarmEngine(app, clock = { clock }, zoneId = { testZone }, registerReplacement = {
+            app.scheduler.schedule(it)
+            if (++registrations == 2) error("simulated scheduler exception")
+        })
+        assertTrue(runCatching { failing.skipTomorrow(setOf("a", "b"), false) }.isFailure)
+        assertEquals(2, registrations)
+        assertEquals(old, runs().toSet())
+        assertTrue(app.runtime.dao().alarms().all { it.model().skipEpochDays.isEmpty() })
+        val system = Shadows.shadowOf(app.getSystemService(AlarmManager::class.java)).scheduledAlarms
+        assertEquals(2, system.size)
+        assertEquals(instant(date.plusDays(1), 6), app.scheduler.nextSystemAlarm()!!.triggerTime)
+    }
+
+    @Test fun editAndTimeZoneChangeKeepLocalSkipWithoutDuplicateOfTodaysRun() = runBlocking {
+        val day = monday(5)
+        var zone = testZone
+        val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { zone })
+        coordinator.save(daily("a"), PrivateAlarm())
+        coordinator.skipTomorrow(setOf("a"), false)
+        val current = runs().single()
+        clock = current.eventAt
+        coordinator.event(current.id, current.version)
+        val alarm = app.runtime.dao().alarms().single().model()
+        zone = ZoneId.of("Europe/Berlin")
+        clock = instant(day, 5, zone = zone)
+        coordinator.save(alarm.copy(hour = 7), PrivateAlarm())
+        coordinator.restore(recalculate = true)
+        assertEquals(instant(day.plusDays(2), 7, zone = zone),
+            runs().single { it.state == RunState.SCHEDULED }.eventAt)
+        assertEquals(1, runs().count { it.sounding })
+    }
+
+    @Test fun laterRingsPreemptAndEndingQueueLeavesFutureAlarmsAndWakeChecks() = runBlocking {
+        val day = monday(5)
+        val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })
+        for (i in 0..3) coordinator.save(daily("a$i", i * 10), PrivateAlarm())
+        for (i in 0..3) {
+            val next = runs().single { it.plan.id == "a$i" && it.state == RunState.SCHEDULED }
+            clock = instant(day, 6, i * 10)
+            coordinator.event(next.id, next.version)
+            coordinator.event(next.id, next.version)
+            assertEquals(next.id, RingingPriority.next(runs())!!.id)
+        }
+        val active = RingingPriority.ordered(runs())
+        assertEquals(4, active.size)
+        coordinator.update(active.last().id, WakeMachine::startMission)
+        coordinator.update(active.last().id) { run, time -> WakeMachine.progress(run, run.version, time) }
+        assertEquals(3, coordinator.endCurrentRings(active.map { it.id }.toSet()))
+        assertEquals(4, runs().count { it.state == RunState.SCHEDULED })
+        assertEquals(1, runs().count { it.state == RunState.WAITING_WAKE_CHECK })
+        assertEquals(3, runs().count { it.state == RunState.CANCELLED && it.firedAt > 0 })
+    }
+
+    @Test fun secondSkipDoesNotBringBackPreviouslySkippedToday() = runBlocking {
+        val date = monday(7)
+        val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })
+        coordinator.save(daily("a"), PrivateAlarm())
+        coordinator.skipTomorrow(setOf("a"), false)
+        clock = instant(date.plusDays(1), 5)
+        coordinator.skipTomorrow(setOf("a"), false)
+        assertEquals(instant(date.plusDays(3), 6), app.scheduler.nextSystemAlarm()!!.triggerTime)
+        assertEquals(2, app.runtime.dao().alarms().single().model().skipEpochDays.size)
     }
 
 }

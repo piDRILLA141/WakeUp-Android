@@ -37,6 +37,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun enabled(id: String, value: Boolean) = action { app.engine.enable(id, value) }
     fun delete(id: String) = action { app.engine.delete(id) }
     fun skip(id: String) = action { app.engine.skip(id) }
+    val scheduleBusy = MutableStateFlow(false)
+    val audioEvents = app.runtime.dao().observeEvents().map { events ->
+        events.filter { it.type.startsWith("AUDIO_") }.take(12)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private fun scheduleAction(block: suspend () -> Unit) {
+        if (!scheduleBusy.compareAndSet(false, true)) return
+        action {
+            try { block() } finally { scheduleBusy.value = false }
+        }
+    }
+
+    fun skipTomorrow(ids: Set<String>, allowOneShot: Boolean, done: () -> Unit) = scheduleAction {
+        val result = app.engine.skipTomorrow(ids, allowOneShot)
+        val message = buildList {
+            if (result.changed > 0) add("Пропущено на завтра: ${result.changed}. Остальное расписание сохранено.")
+            if (result.notScheduled > 0) add("Без звонка на завтра или выключены: ${result.notScheduled}.")
+            if (result.alreadySkipped > 0) add("Уже пропущены: ${result.alreadySkipped}.")
+        }.joinToString(" ")
+        messages.emit(message)
+        done()
+    }
+
+    fun undoSkip(id: String, day: Long) = scheduleAction {
+        app.engine.undoSkip(id, day)
+        messages.emit("Пропуск отменён. Расписание обновлено.")
+    }
+
+    fun disableSelected(ids: Set<String>, done: () -> Unit) = scheduleAction {
+        val count = app.engine.disableAll(ids)
+        messages.emit("Выключено расписаний: $count.")
+        done()
+    }
+
+    fun endCurrentRings(ids: Set<String>) = action {
+        val count = app.engine.endCurrentRings(ids)
+        messages.emit("Завершено звонков: $count.")
+    }
+
     fun duplicate(plan: AlarmPlan, profile: PrivateAlarm) = action {
         val copy=app.engine.duplicateLater(plan.id)
         messages.emit("Будильник добавлен на %02d:%02d".format(copy.hour,copy.minute))
@@ -76,7 +115,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val backup = codec.decodeFromString<Backup>(text)
         require(backup.version == 1 && backup.alarms.size <= 500) { "Неподдерживаемый формат" }
         backup.alarms.forEach { it.plan.validate(); require(it.profile.phrase.length in 1..500 && it.profile.title.length <= 100 && it.profile.qr.length <= 4096); require(it.plan.missions.none { m -> m.kind == MissionKind.QR } || it.profile.qr.isNotEmpty()) }
-        backup.alarms.forEach { app.engine.save(it.plan.copy(id = UUID.randomUUID().toString(), enabled = false), it.profile.copy(soundUri = "")) }
+        backup.alarms.forEach { app.engine.save(it.plan.copy(id = UUID.randomUUID().toString(), enabled = false, lastFiredEpochDay = null), it.profile.copy(soundUri = "")) }
         app.settings.light(backup.settings.light); app.settings.clock24(backup.settings.clock24); app.settings.enhanced(backup.settings.enhancedCheck)
         messages.emit("Импортировано ${backup.alarms.size}. Включите нужные будильники; мелодии выберите заново")
     }

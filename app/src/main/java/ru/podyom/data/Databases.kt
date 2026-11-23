@@ -31,6 +31,8 @@ fun AlarmRun.row() = RunRow(id, plan.id, state.name, eventAt, codec.encodeToStri
     @Upsert suspend fun putAlarm(row: AlarmRow)
     @Upsert suspend fun putRun(row: RunRow)
     @Insert suspend fun event(row: EventRow)
+    @Query("DELETE FROM runs WHERE id = :id AND state = 'SCHEDULED'") suspend fun deletePendingRun(id: String)
+    @Query("DELETE FROM events WHERE runId = :id AND type = 'SCHEDULED'") suspend fun deleteScheduledEvent(id: String)
     @Query("DELETE FROM alarms WHERE id = :id") suspend fun deleteAlarm(id: String)
     @Query("DELETE FROM runs WHERE state IN ('COMPLETED', 'CANCELLED')") suspend fun clearHistory()
     @Query("DELETE FROM events") suspend fun clearEvents()

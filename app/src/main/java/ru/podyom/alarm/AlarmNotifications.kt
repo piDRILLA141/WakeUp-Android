@@ -49,17 +49,17 @@ object AlarmNotifications {
             lockscreenVisibility=Notification.VISIBILITY_PUBLIC
         }
     }
-    fun activity(context: Context, id: String) = PendingIntent.getActivity(context, 0,
-        Intent(context, RingingActivity::class.java).setData("podyom://screen/$id".toUri())
-            .putExtra("runId", id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+    fun activity(context: Context, id: String, followRinging: Boolean = false) = PendingIntent.getActivity(context, 0,
+        Intent(context, RingingActivity::class.java).setData("podyom://screen/$id/$followRinging".toUri())
+            .putExtra("runId", id).putExtra("followRinging", followRinging).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         if (Build.VERSION.SDK_INT >= 35) ActivityOptions.makeBasic().setPendingIntentCreatorBackgroundActivityStartMode(if (Build.VERSION.SDK_INT >= 36) ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS else ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED).toBundle() else null)
-    fun ringing(context: Context, run: AlarmRun? = null, title: String = "Подъём") =
+    fun ringing(context: Context, run: AlarmRun? = null, title: String = "Подъём", announce: Boolean = false) =
         NotificationCompat.Builder(context, RING).setSmallIcon(R.drawable.ic_alarm)
             .setContentTitle(title).setContentText(if (run == null) "Подготовка звонка…" else "Пора вставать · нажмите, чтобы выполнить задание")
             .setCategory(NotificationCompat.CATEGORY_ALARM).setPriority(NotificationCompat.PRIORITY_MAX)
-            .setOngoing(true).setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setOnlyAlertOnce(true)
-            .apply { if (run != null) { val open = activity(context, run.id); setContentIntent(open); setFullScreenIntent(open, true) } }.build()
+            .setOngoing(true).setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setOnlyAlertOnce(!announce)
+            .apply { if (run != null) { val open = activity(context, run.id, followRinging = true); setContentIntent(open); setFullScreenIntent(open, true) } }.build()
     fun refreshChecks(context: Context, runs: List<AlarmRun>) {
         val manager = context.getSystemService(NotificationManager::class.java)
         runs.forEach { r ->
@@ -93,6 +93,20 @@ object AlarmNotifications {
         .setSmallIcon(R.drawable.ic_alarm).setContentTitle("Проверка пробуждения активна")
         .setContentText("Осталось подтвердить пробуждение").setOngoing(true).setOnlyAlertOnce(true)
         .setContentIntent(activity(context,run.id)).build()
+    fun audioFailure(context: Context, id: String, message: String) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        runCatching {
+            manager.notify(44, NotificationCompat.Builder(context, STATUS).setSmallIcon(R.drawable.ic_alarm)
+                .setContentTitle("Проблема со звуком будильника").setContentText(message)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                .setContentIntent(activity(context, id, followRinging = true)).build())
+        }
+    }
+
+    fun clearAudioFailure(context: Context) {
+        context.getSystemService(NotificationManager::class.java).cancel(44)
+    }
+
     fun failure(context: Context, message: String) {
         val open = PendingIntent.getActivity(context, 99, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         try { context.getSystemService(NotificationManager::class.java).notify(99,

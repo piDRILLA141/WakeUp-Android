@@ -30,6 +30,8 @@ import java.time.format.DateTimeFormatter
     var now by remember {mutableLongStateOf(System.currentTimeMillis())}
     var emergency by rememberSaveable {mutableStateOf(false)}
     var phrase by rememberSaveable {mutableStateOf("")}
+    var queuedConfirmation by rememberSaveable {mutableStateOf(arrayListOf<String>())}
+    val queue = RingingPriority.ordered(runs)
     val context=LocalContext.current
     var unlockRevision by remember {mutableIntStateOf(0)}
     var private by remember(id) {mutableStateOf<PrivateAlarm?>(null)}
@@ -65,11 +67,27 @@ import java.time.format.DateTimeFormatter
             RunState.COMPLETED,RunState.CANCELLED -> {Text(if(run.state==RunState.COMPLETED) "Хорошего тебе дня" else "Этот звонок завершён",style=MaterialTheme.typography.headlineLarge);Text("Следующее регулярное срабатывание остаётся в расписании.");Button(onClick=onClose){Text("Готово")}}
             RunState.SCHEDULED -> Text("Будильник запланирован на ${date(run.eventAt)}")
         }
+        if (run.sounding && queue.size > 1) {
+            Text("Незавершённых звонков: ${queue.size}", style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = { queuedConfirmation = ArrayList(queue.map { it.id }) }) {
+                Text("Завершить текущие звонки")
+            }
+        }
         if(message.isNotBlank()) Text(message,color=MaterialTheme.colorScheme.error)
         if(run.sounding && run.snoozes<run.plan.snoozeLimit) OutlinedButton(onClick={vm.snooze(id)},modifier=Modifier.fillMaxWidth()) {Text("Отложить · ${run.plan.snoozeSeconds/60} мин (${run.plan.snoozeLimit-run.snoozes} осталось)")}
         if(!run.terminal) TextButton(onClick={emergency=true}) {Text("Не могу выполнить · аварийное завершение")}
     } }
     ru.podyom.wakecheck.ActiveWakeCheckHost(runs,{rid,answer->vm.confirm(rid,answer)},vm::cancel,excludeId=id)
+    if (queuedConfirmation.isNotEmpty()) AlertDialog(
+        onDismissRequest = { queuedConfirmation = arrayListOf() },
+        title = { Text("Завершить выбранные звонки?") },
+        text = { Text("Незавершённые задания останутся в истории. Будущие сигналы и проверки сохранятся.") },
+        confirmButton = { TextButton(onClick = {
+            vm.endCurrentRings(queuedConfirmation.toSet())
+            queuedConfirmation = arrayListOf()
+        }) { Text("Завершить звонки") } },
+        dismissButton = { TextButton(onClick = { queuedConfirmation = arrayListOf() }) { Text("Отмена") } },
+    )
     if(emergency) AlertDialog(onDismissRequest={emergency=false},title={Text("Завершить текущий звонок и проверки?")},text={Column {Text("Если вам плохо или задание недоступно, можно остановиться. Введите «ЗАВЕРШИТЬ». Случай сохранится в истории без штрафов.");OutlinedTextField(phrase,{phrase=it},label={Text("Подтверждение")})}},confirmButton={TextButton(onClick={vm.cancel(id);emergency=false},enabled=phrase.trim()=="ЗАВЕРШИТЬ"){Text("Завершить")}},dismissButton={TextButton(onClick={emergency=false}){Text("Вернуться")}})
 }
 @Composable private fun MissionPanel(run:AlarmRun,private:PrivateAlarm?,onAnswer:(String)->Unit,onMovement:(Int)->Unit,fallback:()->Unit) {

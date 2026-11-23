@@ -64,6 +64,12 @@ import ru.podyom.missions.CodeScanner
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Scaffold(topBar = { TopAppBar(title = { Text("Твоё новое утро") }, navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, "Закрыть редактор") } }) }, bottomBar = { Surface { Button(onClick = { saveConfirm = true }, modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp)) { Text("Сохранить будильник") } } }) { inset ->
             LazyColumn(Modifier.fillMaxSize().padding(inset).imePadding(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                initial.skipEpochDays.sorted().forEach { day ->
+                    val date = java.time.LocalDate.ofEpochDay(day)
+                    if (date >= java.time.LocalDate.now() || initial.days.isEmpty()) item {
+                        Text("Пропуск на ${date.format(java.time.format.DateTimeFormatter.ofPattern("d MMMM", java.util.Locale.forLanguageTag("ru")))} сохранится при редактировании. Отменить его можно в меню карточки.")
+                    }
+                }
                 item { SmartTimeInput(time, { time = it;attemptedSave=false },showError=attemptedSave) }
                 item { OutlinedTextField(private.title, { profile(private.copy(title = it.take(100))) }, label = { Text("Название") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
                 if(!p.quick) item { Text("Повторение", style = MaterialTheme.typography.titleLarge); FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) { listOf("Пн","Вт","Ср","Чт","Пт","Сб","Вс").forEachIndexed { i, d -> FilterChip(p.days.contains(i+1), { change(p.copy(days = if(i+1 in p.days) p.days-(i+1) else p.days+(i+1), oneShotAt=null)) }, label = { Text(d) }) } }; Text(if(p.days.isEmpty()) "Один раз" else "Каждую выбранную неделю", style = MaterialTheme.typography.bodySmall) }

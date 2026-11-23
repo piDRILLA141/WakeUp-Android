@@ -15,6 +15,8 @@ class RingingViewModel(application: Application):AndroidViewModel(application) {
     val message=MutableStateFlow("")
     private fun action(block:suspend()->Unit) {viewModelScope.launch {try {block()} catch(e:Exception) {if(e is CancellationException) throw e;message.value=e.message?:"Ошибка действия"}}}
     suspend fun profile(key:String)=app.engine.profile(key)
+    fun endCurrentRings(ids: Set<String>) = action { app.engine.endCurrentRings(ids) }
+
     fun dismissQuick(id:String)=action {app.engine.update(id,WakeMachine::dismissQuick)}
     fun start(id:String)=action {app.engine.update(id,WakeMachine::startMission)}
     fun fallback(id:String)=action {app.engine.update(id,WakeMachine::fallback)}

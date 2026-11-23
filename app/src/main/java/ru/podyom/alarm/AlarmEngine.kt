@@ -1,6 +1,9 @@
 package ru.podyom.alarm
 
 import androidx.room.withTransaction
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import ru.podyom.ringing.AudioSignal
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import ru.podyom.App
@@ -10,7 +13,7 @@ import java.time.*
 import java.util.UUID
 
 /** Single-process serialized coordinator; Room, not an Activity, owns every occurrence. */
-class AlarmEngine(private val app: App, private val clock: () -> Long = System::currentTimeMillis, private val elapsed: () -> Long = android.os.SystemClock::elapsedRealtime) {
+class AlarmEngine(private val app: App, private val clock: () -> Long = System::currentTimeMillis, private val elapsed: () -> Long = android.os.SystemClock::elapsedRealtime, private val zoneId: () -> ZoneId = ZoneId::systemDefault, private val registerReplacement: (AlarmRun) -> Unit = { app.scheduler.schedule(it) }) {
     private val mutex = Mutex()
     private var lastQuickAt = Long.MIN_VALUE
     private val db get() = app.runtime
@@ -25,8 +28,23 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         dao.putRun(anchored.row())
         if (previous?.state != next.state || reason != next.state.name) dao.event(EventRow(runId = next.id, at = now(), type = reason))
     }
-    private suspend fun create(plan: AlarmPlan, at: Long) {
-        put(null, AlarmRun(UUID.randomUUID().toString(), plan, at))
+    private fun occurrence(plan: AlarmPlan, at: Long) = AlarmRun(UUID.randomUUID().toString(), plan, at)
+
+    private suspend fun create(plan: AlarmPlan, at: Long) = put(null, occurrence(plan, at))
+
+    suspend fun recordAudio(id: String, signal: AudioSignal) {
+        dao.event(EventRow(runId = id, at = now(), type = "AUDIO_${signal.name}"))
+    }
+
+    suspend fun endCurrentRings(ids: Set<String>): Int = mutex.withLock {
+        val before = runs()
+        val active = before.filter { it.sounding && it.id in ids }
+        if (active.isEmpty()) return@withLock 0
+        db.withTransaction {
+            active.forEach { put(it, WakeMachine.cancel(it, now(), emergency = true), "RING_CANCELLED_BY_USER") }
+        }
+        reconcile(before)
+        active.size
     }
     private suspend fun reconcile(before: List<AlarmRun>, recoverSound: Boolean = false) {
         val after = runs()
@@ -53,22 +71,31 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         require(profile.title.length <= 100 && profile.phrase.length in 1..500 && profile.qr.length <= 4096)
         require(plan.missions.none { it.kind == MissionKind.QR } || profile.qr.isNotEmpty()) { "Сначала зарегистрируйте QR-код" }
         // Immutable private version: editing tomorrow's alarm cannot alter today's active mission.
-        val saved = plan.copy(privateKey = UUID.randomUUID().toString())
-        app.privateDb.dao().putProfile(ProfileRow(saved.privateKey, codec.encodeToString(profile)))
-        val before = runs()
-        db.withTransaction {
-            before.filter { it.plan.id == saved.id && it.state == RunState.SCHEDULED }.forEach { put(it, WakeMachine.cancel(it, now())) }
-            dao.putAlarm(saved.row())
-            if (saved.enabled) create(saved, testAt ?: Schedule.next(saved, Instant.ofEpochMilli(now()), ZoneId.systemDefault()).toEpochMilli())
+        val oldPlan = dao.alarms().firstOrNull { it.id == plan.id }?.model()
+        val zone = zoneId()
+        val skippedOneShotAt = oldPlan?.takeIf {
+            plan.days.isEmpty() && it.days.isEmpty() && it.skipEpochDays.isNotEmpty()
+        }?.oneShotAt?.let { at ->
+            Instant.ofEpochMilli(at).atZone(zone).toLocalDate().atTime(plan.hour, plan.minute)
+                .atZone(zone).toInstant().toEpochMilli()
         }
-        reconcile(before)
-        val failure = dao.runs().firstOrNull { it.alarmId == saved.id && it.state == RunState.SCHEDULED.name && it.diagnostic.isNotEmpty() }
-        check(failure == null) { failure!!.diagnostic }
+        val saved = plan.copy(
+            oneShotAt = plan.oneShotAt ?: skippedOneShotAt,
+            privateKey = UUID.randomUUID().toString(),
+            skipEpochDays = if (oldPlan != null) oldPlan.skipEpochDays else plan.skipEpochDays,
+            lastFiredEpochDay = oldPlan?.lastFiredEpochDay,
+        )
+        app.privateDb.dao().putProfile(ProfileRow(saved.privateKey, codec.encodeToString(profile)))
+        val previous = runs().firstOrNull { it.plan.id == saved.id && it.state == RunState.SCHEDULED }
+        val next = if (saved.enabled) {
+            if (testAt != null) occurrence(saved, testAt) else newOccurrence(saved, now(), zoneId())
+        } else null
+        applyScheduleChanges(listOf(ScheduleChange(saved, previous, next)))
     }
     suspend fun duplicateLater(id: String): AlarmPlan {
         val original = mutex.withLock { dao.alarms().first { it.id == id }.model() }
         val at = mutex.withLock { runs().firstOrNull { it.plan.id == id && it.state == RunState.SCHEDULED }?.scheduledAt }
-        val copy = AlarmShortcuts.copyForNext(original, UUID.randomUUID().toString(), Instant.ofEpochMilli(now()), ZoneId.systemDefault(),at)
+        val copy = AlarmShortcuts.copyForNext(original.copy(skipEpochDays = emptySet(), lastFiredEpochDay = null), UUID.randomUUID().toString(), Instant.ofEpochMilli(now()), zoneId(),at)
         save(copy, profile(original.privateKey) ?: error("Личные настройки недоступны: разблокируйте телефон"))
         return copy
     }
@@ -79,7 +106,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
             lastQuickAt=time
             Instant.ofEpochMilli(time)
         }
-        val plan=AlarmShortcuts.quick(UUID.randomUUID().toString(),instant,ZoneId.systemDefault())
+        val plan=AlarmShortcuts.quick(UUID.randomUUID().toString(),instant,zoneId())
         try { save(plan,PrivateAlarm(title="Через 20 минут"));return plan }
         catch(e:Exception) { mutex.withLock {lastQuickAt=Long.MIN_VALUE};throw e }
     }
@@ -91,17 +118,122 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         check(changed!=r) {if(t>=r.deadline) "Время подтверждения истекло" else "Проверьте ответ"}
         changed
     }
-    suspend fun enable(id: String, enabled: Boolean) = mutex.withLock {
-        if (enabled) check(app.scheduler.allowed()) { "Нет разрешения на точные будильники" }
-        val plan = dao.alarms().firstOrNull { it.id == id }?.model()?.copy(enabled = enabled) ?: return@withLock
-        val before = runs()
-        db.withTransaction {
-            dao.putAlarm(plan.row())
-            before.filter { it.plan.id == id && it.state == RunState.SCHEDULED }.forEach { put(it, WakeMachine.cancel(it, now())) }
-            if (enabled) create(plan, Schedule.next(plan, Instant.ofEpochMilli(now()), ZoneId.systemDefault()).toEpochMilli())
-        }; reconcile(before)
-        val failure=dao.runs().firstOrNull {it.alarmId==id && it.state==RunState.SCHEDULED.name && it.diagnostic.isNotEmpty()}
-        check(failure==null) {failure!!.diagnostic}
+    suspend fun enable(id: String, enabled: Boolean) {
+        if (!enabled) {
+            disableAll(setOf(id))
+            return
+        }
+        mutex.withLock {
+            check(app.scheduler.allowed()) { "Нет разрешения на точные будильники" }
+            val plan = dao.alarms().firstOrNull { it.id == id }?.model() ?: return@withLock
+            if (plan.enabled) return@withLock
+            val updated = plan.copy(enabled = true, skipEpochDays = emptySet(),
+                oneShotAt = plan.oneShotAt?.takeIf { it > now() })
+            applyScheduleChanges(listOf(ScheduleChange(updated, null, newOccurrence(updated, now(), zoneId()))))
+        }
+    }
+
+    data class BulkResult(val changed: Int, val notScheduled: Int, val alreadySkipped: Int = 0)
+
+    suspend fun skipTomorrow(ids: Set<String>, allowOneShot: Boolean): BulkResult = mutex.withLock {
+        val timestamp = now()
+        val zone = zoneId()
+        val tomorrow = Instant.ofEpochMilli(timestamp).atZone(zone).toLocalDate().plusDays(1)
+        val plans = dao.alarms().map { it.model() }.filter { it.id in ids }
+        val pending = runs().filter { it.state == RunState.SCHEDULED }.associateBy { it.plan.id }
+        val changed = mutableListOf<ScheduleChange>()
+        var unavailable = ids.size - plans.size
+        var already = 0
+        plans.forEach { plan ->
+            val existing = pending[plan.id]
+            when {
+                !plan.enabled -> unavailable++
+                tomorrow.toEpochDay() in plan.skipEpochDays -> already++
+                !Schedule.hasOccurrenceOn(plan, tomorrow, zone, existing?.scheduledAt) -> unavailable++
+                plan.days.isEmpty() && !allowOneShot -> error("Подтвердите пропуск одноразовых будильников")
+                else -> {
+                    val updated = plan.copy(
+                        skipEpochDays = plan.skipEpochDays.filter { it >= tomorrow.minusDays(1).toEpochDay() }.toSet() + tomorrow.toEpochDay(),
+                        oneShotAt = if (plan.days.isEmpty()) existing?.scheduledAt ?: plan.oneShotAt else null,
+                    )
+                    val keep = existing?.takeIf { it.scheduledAt.asLocalDate(zone) != tomorrow }
+                    val replacement = if (keep != null) null else newOccurrence(updated, timestamp, zone)
+                    changed += ScheduleChange(updated, if (keep == null) existing else null, replacement)
+                }
+            }
+        }
+        applyScheduleChanges(changed)
+        BulkResult(changed.size, unavailable, already)
+    }
+
+    suspend fun undoSkip(id: String, epochDay: Long? = null) = mutex.withLock {
+        val plan = dao.alarms().firstOrNull { it.id == id }?.model() ?: return@withLock
+        val day = epochDay ?: plan.skipEpochDays.maxOrNull() ?: return@withLock
+        if (day !in plan.skipEpochDays) return@withLock
+        val time = now()
+        val zone = zoneId()
+        val updated = plan.copy(skipEpochDays = plan.skipEpochDays - day)
+        if (plan.days.isEmpty() && (plan.oneShotAt ?: Long.MIN_VALUE) <= time) {
+            applyScheduleChanges(listOf(ScheduleChange(updated.copy(enabled = false), null, null)))
+            return@withLock
+        }
+        val existing = runs().firstOrNull { it.plan.id == id && it.state == RunState.SCHEDULED }
+        val occurrence = if (updated.enabled) newOccurrence(updated, time, zone) else null
+        val unchanged = existing?.scheduledAt == occurrence?.scheduledAt
+        applyScheduleChanges(listOf(ScheduleChange(updated, if (unchanged) null else existing, if (unchanged) null else occurrence)))
+    }
+
+    suspend fun disableAll(ids: Set<String>): Int = mutex.withLock {
+        val pending = runs().filter { it.state == RunState.SCHEDULED }.associateBy { it.plan.id }
+        val changes = dao.alarms().map { it.model() }.filter { it.id in ids && it.enabled }.map {
+            ScheduleChange(it.copy(enabled = false, skipEpochDays = emptySet()), pending[it.id], null)
+        }
+        applyScheduleChanges(changes)
+        changes.size
+    }
+
+    private data class ScheduleChange(val plan: AlarmPlan, val previous: AlarmRun?, val next: AlarmRun?)
+
+    private fun newOccurrence(plan: AlarmPlan, timestamp: Long, zone: ZoneId): AlarmRun? =
+        Schedule.nextOrNull(plan, Instant.ofEpochMilli(timestamp), zone)?.toEpochMilli()?.let {
+            occurrence(plan, it)
+        }
+
+    private fun Long.asLocalDate(zone: ZoneId) = Instant.ofEpochMilli(this).atZone(zone).toLocalDate()
+
+    /**
+     * Register replacement intents with fresh IDs before changing Room. The engine mutex
+     * prevents their receivers from resolving those IDs until the transaction is committed.
+     * The old alarms remain registered if any replacement registration fails.
+     */
+    private suspend fun applyScheduleChanges(changes: List<ScheduleChange>) = withContext(NonCancellable) {
+        if (changes.isEmpty()) return@withContext
+        val replacements = changes.mapNotNull { it.next }
+        if (replacements.isNotEmpty()) {
+            check(app.scheduler.allowed()) { "Нет разрешения на точные будильники. Расписание сохранено." }
+        }
+        val staged = mutableListOf<AlarmRun>()
+        try {
+            replacements.forEach { next ->
+                staged += next
+                registerReplacement(next)
+            }
+            db.withTransaction {
+                changes.forEach { change ->
+                    dao.putAlarm(change.plan.row())
+                    change.previous?.let {
+                        // A scheduled placeholder is not a ringing or missed occurrence.
+                        dao.deletePendingRun(it.id)
+                        dao.deleteScheduledEvent(it.id)
+                    }
+                    change.next?.let { put(null, it) }
+                }
+            }
+        } catch (e: Exception) {
+            staged.forEach { runCatching { app.scheduler.cancel(it) } }
+            throw IllegalStateException("Не удалось обновить системное расписание. Прежнее расписание сохранено.", e)
+        }
+        changes.mapNotNull { it.previous }.forEach { app.scheduler.cancel(it) }
     }
     suspend fun delete(id: String) = mutex.withLock {
         val before = runs()
@@ -116,24 +248,43 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         db.withTransaction {
             put(next, WakeMachine.cancel(next, now()), "SKIPPED")
             if (next.plan.days.isEmpty()) dao.putAlarm(next.plan.copy(enabled = false).row())
-            else create(next.plan, Schedule.next(next.plan, Instant.ofEpochMilli(next.scheduledAt), ZoneId.systemDefault()).toEpochMilli())
+            else create(next.plan, Schedule.next(next.plan, Instant.ofEpochMilli(next.scheduledAt), zoneId()).toEpochMilli())
         }; reconcile(before)
     }
     suspend fun event(id: String, token: Int) = mutex.withLock {
-        val before = runs(); val r = before.firstOrNull { it.id == id } ?: return@withLock
-        val next = WakeMachine.due(r, token, now())
+        val before = runs()
+        val run = before.firstOrNull { it.id == id && it.version == token } ?: return@withLock
+        val time = now()
+        val next = WakeMachine.due(run, token, time)
+        if (next == run) {
+            if (run.needsEvent) reconcile(before)
+            return@withLock
+        }
         db.withTransaction {
-            if (next != r) {
-                put(r, next)
-                if (r.state == RunState.SCHEDULED) {
-                    val current = dao.alarms().firstOrNull { it.id == r.plan.id }?.model()
-                    if (current?.enabled == true) {
-                        if (current.days.isEmpty()) dao.putAlarm(current.copy(enabled = false).row())
-                        else create(current, Schedule.next(current, Instant.ofEpochMilli(now()), ZoneId.systemDefault()).toEpochMilli())
+            if (run.state != RunState.SCHEDULED) {
+                put(run, next)
+            } else {
+                val plan = dao.alarms().firstOrNull { it.id == run.plan.id }?.model()
+                val day = run.scheduledAt.asLocalDate(zoneId()).toEpochDay()
+                if (plan?.enabled == true && day !in plan.skipEpochDays &&
+                    (plan.days.isEmpty() || plan.lastFiredEpochDay != day)) {
+                    put(run, next)
+                    val updated = if (plan.days.isEmpty()) plan.copy(enabled = false)
+                        else plan.copy(lastFiredEpochDay = day)
+                    dao.putAlarm(updated.row())
+                    if (updated.enabled) {
+                        newOccurrence(updated, time, zoneId())?.let { put(null, it) }
+                    }
+                } else {
+                    dao.deletePendingRun(run.id)
+                    dao.deleteScheduledEvent(run.id)
+                    if (plan?.enabled == true) {
+                        newOccurrence(plan, time, zoneId())?.let { put(null, it) }
                     }
                 }
             }
-        }; reconcile(before)
+        }
+        reconcile(before)
     }
     suspend fun update(id: String, operation: (AlarmRun, Long) -> AlarmRun) = mutex.withLock {
         val before = runs(); val run = before.firstOrNull { it.id == id } ?: return@withLock
@@ -154,12 +305,23 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                     put(run, updated, "CLOCK_REBASED")
                     if(run.plan.quick) dao.putAlarm(updated.plan.row())
                 }
-                before.filter { it.state == RunState.SCHEDULED && !it.plan.quick }.forEach { put(it, WakeMachine.cancel(it, now()), "CLOCK_CHANGED") }
+                before.filter { it.state == RunState.SCHEDULED && !it.plan.quick }.forEach {
+                    dao.deletePendingRun(it.id)
+                    dao.deleteScheduledEvent(it.id)
+                }
             }
-            // Keep overdue occurrences. They are delivered immediately after reboot, not silently rolled to tomorrow.
+            // Restore the saved date exclusion before creating or re-registering an occurrence.
             dao.alarms().map { it.model() }.filter { it.enabled }.forEach { plan ->
-                if (runs().none { it.plan.id == plan.id && it.state == RunState.SCHEDULED })
-                    create(plan, Schedule.next(plan, Instant.ofEpochMilli(now()), ZoneId.systemDefault()).toEpochMilli())
+                val pending = runs().firstOrNull { it.plan.id == plan.id && it.state == RunState.SCHEDULED }
+                val excluded = pending != null && plan.skipEpochDays.isNotEmpty() &&
+                    (plan.days.isEmpty() || pending.scheduledAt.asLocalDate(zoneId()).toEpochDay() in plan.skipEpochDays)
+                if (excluded && pending != null) {
+                    dao.deletePendingRun(pending.id)
+                    dao.deleteScheduledEvent(pending.id)
+                }
+                if (pending == null || excluded) {
+                    newOccurrence(plan, now(), zoneId())?.let { put(null, it) }
+                }
             }
         }
         reconcile(before, recoverSound = true)

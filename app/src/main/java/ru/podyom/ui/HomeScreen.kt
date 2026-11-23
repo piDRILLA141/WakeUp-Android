@@ -4,6 +4,9 @@ import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.combinedClickable
+import androidx.activity.compose.BackHandler
+import ru.podyom.ringing.AudioSignal
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -37,6 +40,21 @@ import java.util.UUID
     var editor by rememberSaveable { mutableStateOf<String?>(null) }
     var confirm by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var readiness by rememberSaveable { mutableStateOf(false) }
+    val busy by vm.scheduleBusy.collectAsStateWithLifecycle()
+    val audioEvents by vm.audioEvents.collectAsStateWithLifecycle()
+    var selectedIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var scheduleIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var scheduleOption by rememberSaveable { mutableStateOf("") }
+    val selecting = selectedIds.isNotEmpty()
+    val ringing = RingingPriority.ordered(runs)
+    fun select(id: String) {
+        if (!busy) selectedIds = ArrayList(if (id in selectedIds) selectedIds - id else selectedIds + id)
+    }
+    fun openSchedule(ids: Collection<String>, option: String) {
+        scheduleIds = ArrayList(ids)
+        scheduleOption = option
+    }
+    BackHandler(selecting && !busy) { selectedIds = arrayListOf() }
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -47,9 +65,17 @@ import java.util.UUID
     val import = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(vm::import) }
     val tabs = listOf("Будильники", "Сон", "Статистика", "Настройки")
     val icons = listOf(Icons.Outlined.Alarm, Icons.Outlined.Bedtime, Icons.Outlined.Insights, Icons.Outlined.Settings)
-    Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
-        NavigationBar { tabs.forEachIndexed { i, title -> NavigationBarItem(selected = tab == i, onClick = { tab = i }, icon = { Icon(icons[i], title) }, label = { Text(title, fontSize = 11.sp) }) } }
-    }, floatingActionButton = { if (tab == 0 && !readiness) FloatingActionButton(onClick = { editor = "new" }) { Icon(Icons.Outlined.Add, "Создать будильник") } }) { padding ->
+    Scaffold(snackbarHost = { SnackbarHost(snackbar) }, topBar = {
+        if (selecting && tab == 0) TopAppBar(
+            title = { Text("Выбрано: ${selectedIds.size}") },
+            actions = {
+                TextButton(onClick = { selectedIds = ArrayList(alarms.map { it.id }) }, enabled = !busy) { Text("Выбрать все") }
+                TextButton(onClick = { selectedIds = arrayListOf() }, enabled = !busy) { Text("Отмена") }
+            },
+        )
+    }, bottomBar = {
+        NavigationBar { tabs.forEachIndexed { i, title -> NavigationBarItem(selected = tab == i, onClick = { if (!busy) { tab = i; if (i != 0) selectedIds = arrayListOf() } }, icon = { Icon(icons[i], title) }, label = { Text(title, fontSize = 11.sp) }) } }
+    }, floatingActionButton = { if (tab == 0 && !readiness && !selecting) FloatingActionButton(onClick = { editor = "new" }) { Icon(Icons.Outlined.Add, "Создать будильник") } }) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding).imePadding(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (readiness) {
                 item { Readiness() }
@@ -64,7 +90,14 @@ import java.util.UUID
                         val nearest = runs.filter { it.state == RunState.SCHEDULED }.minByOrNull { it.eventAt }
                         Text(nearest?.let { "Следующий будильник через ${duration(it.eventAt - now)}" } ?: "Время для нового утра", style = MaterialTheme.typography.bodyLarge)
                     }
-                    item { FilledTonalButton(onClick=vm::quick, modifier=Modifier.fillMaxWidth()) {
+                    if (selecting) item {
+                        Button(onClick = { openSchedule(selectedIds, "skip") }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                            Text("Пропустить завтра")
+                        }
+                        OutlinedButton(onClick = { openSchedule(selectedIds, "disable") }, enabled = !busy,
+                            modifier = Modifier.fillMaxWidth()) { Text("Выключить полностью") }
+                    }
+                    if (!selecting) item { FilledTonalButton(onClick=vm::quick, modifier=Modifier.fillMaxWidth()) {
                         Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(8.dp)); Text("Через 20 минут")
                     } }
                     val readinessProblems = ru.podyom.permissions.readinessProblems(context)
@@ -76,11 +109,22 @@ import java.util.UUID
                     }
                     val diagnostics = rows.filter { it.diagnostic.isNotEmpty() }
                     if (diagnostics.isNotEmpty()) item { Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) { Text("Расписание требует внимания: ${diagnostics.first().diagnostic}", Modifier.padding(16.dp)) } }
-                    if(runs.any { !it.terminal && it.state != RunState.SCHEDULED }) {
+                    if (!selecting && ringing.size > 1) item {
+                        OutlinedButton(onClick = {
+                            confirm = "Завершить текущие звонки (${ringing.size})? Незавершённые задания останутся в истории. Будущие сигналы и проверки сохранятся." to { vm.endCurrentRings(ringing.map { it.id }.toSet()) }
+                        }) { Text("Завершить текущие звонки") }
+                    }
+                    if (!selecting && runs.any { !it.terminal && it.state != RunState.SCHEDULED }) {
                         items(runs.filter { !it.terminal && it.state != RunState.SCHEDULED }, key = { "active-${it.id}" }) { run ->
                             Card(onClick = { context.startActivity(Intent(context, RingingActivity::class.java).putExtra("runId", run.id)) }, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                                 Column(Modifier.fillMaxWidth().padding(20.dp)) {
-                                    Text(stateLabel(run.state), style = MaterialTheme.typography.titleLarge)
+                                    val status = when {
+                                        run.sounding && run.id != ringing.firstOrNull()?.id -> "В очереди · не завершён"
+                                        run.sounding -> "Текущий звонок"
+                                        else -> stateLabel(run.state)
+                                    }
+                                    Text(status, style = MaterialTheme.typography.titleLarge)
+                                    Text(date(run.ringingSince ?: run.scheduledAt), style = MaterialTheme.typography.bodySmall)
                                     Text(profiles[run.plan.privateKey]?.title ?: "Подъём")
                                     if(run.needsEvent) Text("Через ${duration(run.eventAt - now)}")
                                     Text("Открыть", color = MaterialTheme.colorScheme.primary)
@@ -91,9 +135,15 @@ import java.util.UUID
                     if (alarms.isEmpty()) item { Card { Column(Modifier.padding(24.dp)) { Icon(Icons.Outlined.WbTwilight, null, Modifier.size(48.dp)); Spacer(Modifier.height(16.dp)); Text("Утро начинается здесь", style = MaterialTheme.typography.titleLarge); Text("Создайте первый будильник. Задание поможет встать, а проверка напомнит не возвращаться в постель.") } } }
                     items(alarms.sortedBy { p -> runs.firstOrNull { it.plan.id == p.id && it.state == RunState.SCHEDULED }?.eventAt ?: Long.MAX_VALUE }, key = { it.id }) { alarm ->
                         val profile = profiles[alarm.privateKey] ?: PrivateAlarm()
-                        AlarmCard(alarm, profile, settings.clock24, edit = { editor = alarm.id }, toggle = { enabled ->
-                            if(enabled) vm.enabled(alarm.id, true) else confirm = "Выключить «${profile.title}»? Активные проверки останутся доступны отдельно." to { vm.enabled(alarm.id, false) }
-                        }, duplicate = { vm.duplicate(alarm, profile) }, skip = { confirm = "Пропустить только следующее срабатывание?" to { vm.skip(alarm.id) } }, delete = { confirm = "Удалить «${profile.title}» вместе с его активными проверками?" to { vm.delete(alarm.id) } })
+                        val next = runs.firstOrNull { it.plan.id == alarm.id && it.state == RunState.SCHEDULED }
+                        val today = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate()
+                        AlarmCard(alarm, profile, settings.clock24, next, today, selecting, alarm.id in selectedIds,
+                            edit = { if (selecting) select(alarm.id) else editor = alarm.id },
+                            longPress = { select(alarm.id) }, toggle = { enabled ->
+                                if (enabled) vm.enabled(alarm.id, true) else openSchedule(listOf(alarm.id), "choose")
+                            }, duplicate = { vm.duplicate(alarm, profile) },
+                            undoSkip = { day -> vm.undoSkip(alarm.id, day) },
+                            delete = { confirm = "Удалить «${profile.title}» вместе с его активными проверками?" to { vm.delete(alarm.id) } })
                     }
                     item { Spacer(Modifier.height(76.dp)) }
                 }
@@ -116,6 +166,17 @@ import java.util.UUID
                     item { ToggleRow("Светлая тема", settings.light, vm::light); ToggleRow("24-часовой формат", settings.clock24, vm::clock24) }
                     item { ru.podyom.permissions.WakeCheckSettings(settings.enhancedCheck,vm::enhanced) }
                     item { ru.podyom.permissions.ScheduleDiagnostics(runs, rows) }
+                    if (audioEvents.isNotEmpty()) item {
+                        OutlinedCard {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("Диагностика звука", style = MaterialTheme.typography.titleMedium)
+                                audioEvents.forEach { event ->
+                                    val signal = AudioSignal.entries.firstOrNull { "AUDIO_${it.name}" == event.type }
+                                    if (signal != null) Text("${date(event.at)} · ${audioLabel(signal)}", style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
                     item { Text("Язык: русский\nКнопки громкости: системное управление потоком будильника", style = MaterialTheme.typography.bodyMedium) }
                     item { Button(onClick = { readiness = true }, modifier = Modifier.fillMaxWidth()) { Text("Проверка разрешений") } }
                     item { OutlinedButton(onClick = { vm.test() }, modifier = Modifier.fillMaxWidth()) { Text("Будильник через 10 секунд") } }
@@ -126,6 +187,43 @@ import java.util.UUID
                 }
             }
         }
+    }
+    if (scheduleOption.isNotEmpty()) {
+        val zone = ZoneId.systemDefault()
+        val tomorrow = Instant.ofEpochMilli(now).atZone(zone).toLocalDate().plusDays(1)
+        val eligible = alarms.filter { plan ->
+            plan.id in scheduleIds && plan.enabled && tomorrow.toEpochDay() !in plan.skipEpochDays &&
+                Schedule.hasOccurrenceOn(plan, tomorrow, zone,
+                    runs.firstOrNull { it.plan.id == plan.id && it.state == RunState.SCHEDULED }?.scheduledAt)
+        }
+        val oneShot = eligible.any { it.days.isEmpty() }
+        val explanation = when {
+            scheduleOption == "disable" -> "Выключится будущее расписание выбранных будильников. Текущие звонки и начатые проверки сохранятся."
+            eligible.isEmpty() -> "У выбранных будильников нет звонка на завтра или он уже пропущен."
+            oneShot -> "Пропуск одноразового будильника отменит его единственное срабатывание. Пропуск можно отменить до этого времени."
+            else -> "Завтрашние сигналы будут пропущены. Срабатывания на другие даты сохранятся."
+        }
+        fun closeSchedule() { scheduleOption = ""; scheduleIds = arrayListOf() }
+        fun done() { closeSchedule(); selectedIds = arrayListOf() }
+        AlertDialog(
+            onDismissRequest = { if (!busy) closeSchedule() },
+            title = { Text(if (scheduleOption == "choose") "Что сделать с будильником?" else "Выбранные будильники: ${scheduleIds.size}") },
+            text = {
+                Column {
+                    Text(explanation)
+                    if (scheduleOption != "disable") {
+                        TextButton(onClick = { vm.skipTomorrow(scheduleIds.toSet(), oneShot, ::done) },
+                            enabled = !busy && eligible.isNotEmpty()) { Text("Пропустить завтра") }
+                    }
+                    if (scheduleOption != "skip") {
+                        TextButton(onClick = { vm.disableSelected(scheduleIds.toSet(), ::done) }, enabled = !busy) {
+                            Text("Выключить полностью")
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = ::closeSchedule, enabled = !busy) { Text("Отмена") } },
+        )
     }
     editor?.let { key ->
         val original = alarms.find { it.id == key }
@@ -138,20 +236,81 @@ import java.util.UUID
     ru.podyom.wakecheck.ActiveWakeCheckHost(runs,vm::confirmCheck,vm::cancelCheck)
 }
 @Composable fun ToggleRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { Text(title, Modifier.weight(1f)); Switch(checked, onChange) } }
-@Composable private fun AlarmCard(plan: AlarmPlan, profile: PrivateAlarm, clock24: Boolean, edit: () -> Unit, toggle: (Boolean) -> Unit, duplicate: () -> Unit, skip: () -> Unit, delete: () -> Unit) {
+@Composable
+private fun AlarmCard(
+    plan: AlarmPlan, profile: PrivateAlarm, clock24: Boolean, next: AlarmRun?, today: LocalDate,
+    selecting: Boolean, selected: Boolean, edit: () -> Unit, longPress: () -> Unit,
+    toggle: (Boolean) -> Unit, duplicate: () -> Unit, undoSkip: (Long) -> Unit, delete: () -> Unit,
+) {
     var menu by remember { mutableStateOf(false) }
-    Card(onClick = edit, modifier = Modifier.fillMaxWidth(), colors=CardDefaults.cardColors(containerColor=if(plan.enabled) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow)) { Column(Modifier.padding(16.dp)) {
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Text(LocalTime.of(plan.hour, plan.minute).format(DateTimeFormatter.ofPattern(if(clock24) "HH:mm" else "hh:mm a", java.util.Locale.forLanguageTag("ru"))), style = MaterialTheme.typography.displayMedium, modifier = Modifier.weight(1f), color = if(plan.enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
-            Switch(plan.enabled, toggle)
+    val skipDates = plan.skipEpochDays.map(LocalDate::ofEpochDay).filter { plan.days.isEmpty() || it >= today }.sorted()
+    val formatter = DateTimeFormatter.ofPattern("d MMMM", java.util.Locale.forLanguageTag("ru"))
+    Card(
+        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = edit, onLongClick = longPress, onLongClickLabel = "Выбрать будильник"),
+        colors = CardDefaults.cardColors(containerColor = when {
+            selected -> MaterialTheme.colorScheme.primaryContainer
+            plan.enabled -> MaterialTheme.colorScheme.surfaceContainerHigh
+            else -> MaterialTheme.colorScheme.surfaceContainerLow
+        }),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text(LocalTime.of(plan.hour, plan.minute).format(DateTimeFormatter.ofPattern(
+                    if (clock24) "HH:mm" else "hh:mm a", java.util.Locale.forLanguageTag("ru"),
+                )), style = MaterialTheme.typography.displayMedium, modifier = Modifier.weight(1f),
+                    color = if (plan.enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant)
+                if (selecting) Checkbox(checked = selected, onCheckedChange = null)
+                else Switch(plan.enabled, toggle)
+            }
+            Text(profile.title, style = MaterialTheme.typography.titleMedium)
+            Text(if (plan.days.isEmpty()) "Один раз" else plan.days.sorted().joinToString(" · ") {
+                listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")[it - 1]
+            }, color = MaterialTheme.colorScheme.primary)
+            skipDates.forEach { skipDate ->
+                Text(if (skipDate == today.plusDays(1)) "Завтра пропущен" else
+                    "Пропуск: " + skipDate.format(formatter),
+                    color = MaterialTheme.colorScheme.primary)
+            }
+            if (next != null) Text("Следующий звонок · ${date(next.eventAt)}", style = MaterialTheme.typography.bodySmall)
+            else if (skipDates.isNotEmpty() && plan.days.isEmpty()) Text("Единственное срабатывание пропущено", style = MaterialTheme.typography.bodySmall)
+            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text((if (plan.quick) "Обычное подтверждение" else plan.missions.joinToString(" → ") { it.kind.title }) +
+                    if (plan.wakeCheck) " · Проверка пробуждения" else "", style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f))
+                if (!selecting) Box {
+                    IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Действия будильника") }
+                    DropdownMenu(menu, { menu = false }) {
+                        DropdownMenuItem(text = { Text("Дублировать на 10 минут позже") }, onClick = { menu = false; duplicate() })
+                        skipDates.forEach { day ->
+                            DropdownMenuItem(text = { Text(if (skipDates.size == 1) "Отменить пропуск" else "Отменить пропуск · ${day.format(formatter)}") },
+                                onClick = { menu = false; undoSkip(day.toEpochDay()) })
+                        }
+                        DropdownMenuItem(text = { Text("Удалить") }, onClick = { menu = false; delete() })
+                    }
+                }
+            }
         }
-        Text(profile.title, style = MaterialTheme.typography.titleMedium)
-        Text(if(plan.days.isEmpty()) "Один раз" else plan.days.sorted().joinToString(" · ") { listOf("Пн","Вт","Ср","Чт","Пт","Сб","Вс")[it-1] }, color = MaterialTheme.colorScheme.primary)
-        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            Text((if(plan.quick) "Обычное подтверждение" else plan.missions.joinToString(" → ") { it.kind.title }) + if(plan.wakeCheck) " · Проверка пробуждения" else "", style = MaterialTheme.typography.bodySmall, modifier=Modifier.weight(1f))
-            Box { IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Действия будильника") }; DropdownMenu(menu, { menu = false }) { DropdownMenuItem(text = { Text("Дублировать на 10 минут позже") }, onClick = { menu=false; duplicate() }); DropdownMenuItem(text = { Text("Пропустить следующий") }, onClick = { menu=false; skip() }, enabled = plan.enabled); DropdownMenuItem(text = { Text("Удалить") }, onClick = { menu=false; delete() }) } }
-        }
-    } }
+    }
+}
+
+private fun audioLabel(signal: AudioSignal): String = when (signal) {
+    AudioSignal.PLAYBACK_STARTED -> "Началось воспроизведение"
+    AudioSignal.PLAYBACK_STOPPED -> "Плеер остановился"
+    AudioSignal.PLAYER_ERROR -> "Ошибка плеера"
+    AudioSignal.MEDIA_SERVER_DIED -> "Медиаслужба Android перезапустилась"
+    AudioSignal.PLAYER_IO_ERROR -> "Ошибка чтения звука"
+    AudioSignal.SOURCE_UNAVAILABLE -> "Звуковой файл недоступен"
+    AudioSignal.PREPARE_TIMEOUT -> "Истекло время подготовки плеера"
+    AudioSignal.USING_FALLBACK -> "Выбран встроенный сигнал"
+    AudioSignal.FOCUS_DELAYED -> "Android отложил предоставление аудиофокуса"
+    AudioSignal.FOCUS_PAUSED -> "Временная потеря аудиофокуса"
+    AudioSignal.FOCUS_GAINED -> "Аудиофокус восстановлен"
+    AudioSignal.FOCUS_RETRY -> "Аудиофокус запрошен повторно"
+    AudioSignal.CALL_PAUSED -> "Звук приостановлен для вызова"
+    AudioSignal.ROUTE_CHANGED -> "Изменились доступные аудиовыходы"
+    AudioSignal.ROUTE_MONITOR_UNAVAILABLE -> "Наблюдение за аудиовыходами недоступно"
+    AudioSignal.VIBRATION_FAILED -> "Не удалось включить вибрацию"
+    else -> signal.detail ?: "Ошибка звука"
 }
 @Composable private fun StatsCard(runs: List<AlarmRun>) { Card { Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("Сработало: ${runs.size}"); Text("Подтверждено: ${runs.count { it.state == RunState.COMPLETED && it.plan.wakeCheck }}"); Text("Повторных звонков: ${runs.sumOf { it.cycle }}"); Text("Откладываний: ${runs.sumOf { it.snoozes }}"); Text("Без ответа на проверку: ${runs.sumOf { it.missedChecks }}"); val times = runs.filter { it.missionFinishedAt > it.firedAt }.map { it.missionFinishedAt-it.firedAt }; Text("Среднее время до выполнения: ${if(times.isEmpty()) "нет данных" else duration(times.average().toLong())}") } } }
 @Composable private fun MiniBars(values: List<Float>) { val color = MaterialTheme.colorScheme.primary; Canvas(Modifier.fillMaxWidth().height(90.dp).padding(vertical=12.dp)) { if(values.isNotEmpty()) { val step = size.width/values.size; val max = (values.maxOrNull() ?: 1f).coerceAtLeast(1f); values.forEachIndexed { i, v -> drawLine(color, Offset(step*(i+.5f), size.height), Offset(step*(i+.5f), size.height*(1-v/max)), strokeWidth=step*.5f) } } } }
