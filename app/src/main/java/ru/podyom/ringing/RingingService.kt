@@ -47,7 +47,10 @@ class RingingService : Service() {
             }
             if (id == activeId) {
                 signal.detail?.let { AlarmNotifications.audioFailure(this, id, it) }
-                if (signal == AudioSignal.PLAYBACK_STARTED) AlarmNotifications.clearAudioFailure(this)
+                if (signal == AudioSignal.PLAYBACK_STARTED &&
+                    getSystemService(android.media.AudioManager::class.java).getStreamVolume(android.media.AudioManager.STREAM_ALARM) > 0) {
+                    AlarmNotifications.clearAudioFailure(this)
+                }
             }
         }
         overlay = WakeCheckOverlay(this, scope)

@@ -45,6 +45,16 @@ import java.util.UUID
     var selectedIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var scheduleIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     var scheduleOption by rememberSaveable { mutableStateOf("") }
+    val completed by vm.scheduleCompleted.collectAsStateWithLifecycle()
+    var acknowledged by rememberSaveable { mutableIntStateOf(completed) }
+    LaunchedEffect(completed) {
+        if (acknowledged != completed) {
+            acknowledged = completed
+            scheduleOption = ""
+            scheduleIds = arrayListOf()
+            selectedIds = arrayListOf()
+        }
+    }
     val selecting = selectedIds.isNotEmpty()
     val ringing = RingingPriority.ordered(runs)
     fun select(id: String) {
@@ -204,7 +214,6 @@ import java.util.UUID
             else -> "Завтрашние сигналы будут пропущены. Срабатывания на другие даты сохранятся."
         }
         fun closeSchedule() { scheduleOption = ""; scheduleIds = arrayListOf() }
-        fun done() { closeSchedule(); selectedIds = arrayListOf() }
         AlertDialog(
             onDismissRequest = { if (!busy) closeSchedule() },
             title = { Text(if (scheduleOption == "choose") "Что сделать с будильником?" else "Выбранные будильники: ${scheduleIds.size}") },
@@ -212,11 +221,11 @@ import java.util.UUID
                 Column {
                     Text(explanation)
                     if (scheduleOption != "disable") {
-                        TextButton(onClick = { vm.skipTomorrow(scheduleIds.toSet(), oneShot, ::done) },
+                        TextButton(onClick = { vm.skipTomorrow(scheduleIds.toSet(), oneShot) },
                             enabled = !busy && eligible.isNotEmpty()) { Text("Пропустить завтра") }
                     }
                     if (scheduleOption != "skip") {
-                        TextButton(onClick = { vm.disableSelected(scheduleIds.toSet(), ::done) }, enabled = !busy) {
+                        TextButton(onClick = { vm.disableSelected(scheduleIds.toSet()) }, enabled = !busy) {
                             Text("Выключить полностью")
                         }
                     }

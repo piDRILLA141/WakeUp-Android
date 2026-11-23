@@ -90,7 +90,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         val next = if (saved.enabled) {
             if (testAt != null) occurrence(saved, testAt) else newOccurrence(saved, now(), zoneId())
         } else null
-        applyScheduleChanges(listOf(ScheduleChange(saved, previous, next)))
+        applyScheduleChanges(listOf(ScheduleChange(saved, previous, next, keepCancelled = true)))
     }
     suspend fun duplicateLater(id: String): AlarmPlan {
         val original = mutex.withLock { dao.alarms().first { it.id == id }.model() }
@@ -192,7 +192,12 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         changes.size
     }
 
-    private data class ScheduleChange(val plan: AlarmPlan, val previous: AlarmRun?, val next: AlarmRun?)
+    private data class ScheduleChange(
+        val plan: AlarmPlan,
+        val previous: AlarmRun?,
+        val next: AlarmRun?,
+        val keepCancelled: Boolean = false,
+    )
 
     private fun newOccurrence(plan: AlarmPlan, timestamp: Long, zone: ZoneId): AlarmRun? =
         Schedule.nextOrNull(plan, Instant.ofEpochMilli(timestamp), zone)?.toEpochMilli()?.let {
@@ -222,9 +227,13 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                 changes.forEach { change ->
                     dao.putAlarm(change.plan.row())
                     change.previous?.let {
-                        // A scheduled placeholder is not a ringing or missed occurrence.
-                        dao.deletePendingRun(it.id)
-                        dao.deleteScheduledEvent(it.id)
+                        if (change.keepCancelled) {
+                            put(it, WakeMachine.cancel(it, now()))
+                        } else {
+                            // A skipped placeholder is not a ringing or missed occurrence.
+                            dao.deletePendingRun(it.id)
+                            dao.deleteScheduledEvent(it.id)
+                        }
                     }
                     change.next?.let { put(null, it) }
                 }

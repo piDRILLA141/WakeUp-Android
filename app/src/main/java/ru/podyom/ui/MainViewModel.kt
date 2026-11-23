@@ -38,6 +38,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun delete(id: String) = action { app.engine.delete(id) }
     fun skip(id: String) = action { app.engine.skip(id) }
     val scheduleBusy = MutableStateFlow(false)
+    val scheduleCompleted = MutableStateFlow(0)
     val audioEvents = app.runtime.dao().observeEvents().map { events ->
         events.filter { it.type.startsWith("AUDIO_") }.take(12)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -49,7 +50,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun skipTomorrow(ids: Set<String>, allowOneShot: Boolean, done: () -> Unit) = scheduleAction {
+    fun skipTomorrow(ids: Set<String>, allowOneShot: Boolean) = scheduleAction {
         val result = app.engine.skipTomorrow(ids, allowOneShot)
         val message = buildList {
             if (result.changed > 0) add("Пропущено на завтра: ${result.changed}. Остальное расписание сохранено.")
@@ -57,7 +58,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (result.alreadySkipped > 0) add("Уже пропущены: ${result.alreadySkipped}.")
         }.joinToString(" ")
         messages.emit(message)
-        done()
+        scheduleCompleted.value++
     }
 
     fun undoSkip(id: String, day: Long) = scheduleAction {
@@ -65,10 +66,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         messages.emit("Пропуск отменён. Расписание обновлено.")
     }
 
-    fun disableSelected(ids: Set<String>, done: () -> Unit) = scheduleAction {
+    fun disableSelected(ids: Set<String>) = scheduleAction {
         val count = app.engine.disableAll(ids)
         messages.emit("Выключено расписаний: $count.")
-        done()
+        scheduleCompleted.value++
     }
 
     fun endCurrentRings(ids: Set<String>) = action {
