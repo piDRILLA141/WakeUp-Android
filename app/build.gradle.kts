@@ -36,6 +36,10 @@ android {
             it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
             it.systemProperty("user.home", rootProject.layout.projectDirectory.dir(".gradle/test-home").asFile.apply { mkdirs() }.absolutePath)
             it.systemProperty("robolectric.dependency.repo.url", "https://repo.maven.apache.org/maven2")
+            System.getenv("PODYOM_ROBOLECTRIC_SDK_DIR")?.let { sdkDir ->
+                it.systemProperty("robolectric.offline", "true")
+                it.systemProperty("robolectric.dependency.dir", sdkDir)
+            }
             listOf("http.proxyHost", "http.proxyPort", "https.proxyHost", "https.proxyPort", "javax.net.ssl.trustStore").forEach { key ->
                 System.getProperty(key)?.let { value -> it.systemProperty(key, value) }
             }
