@@ -2,9 +2,8 @@ package ru.podyom
 
 import android.app.NotificationManager
 import android.content.Intent
-import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
@@ -12,6 +11,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
@@ -26,7 +26,7 @@ import java.util.UUID
 @Config(sdk = [36], application = App::class, qualifiers = "w412dp-h915dp-xxhdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class WakeActivityRouteTest {
-    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+    @get:Rule val compose = createEmptyComposeRule()
 
     private fun storedCheck(app: App, deadline: Long, cycle: Int = 0, strict: Boolean = false): AlarmRun {
         val run = AlarmRun(UUID.randomUUID().toString(), AlarmPlan(UUID.randomUUID().toString(), strictCheck = strict),
@@ -46,7 +46,7 @@ class WakeActivityRouteTest {
     }
 
     @Test fun tappingNotificationOpensItsCheckAfterRecreationAndUsesTheNextIntent() {
-        val app = compose.activity.application as App
+        val app = RuntimeEnvironment.getApplication() as App
         val first = storedCheck(app, System.currentTimeMillis() + 120_000)
         val second = storedCheck(app, System.currentTimeMillis() + 150_000, strict = true)
         val firstIntent = pendingIntent(app, first)
@@ -72,7 +72,7 @@ class WakeActivityRouteTest {
     }
 
     @Test fun expiredAndMissingNotificationStayOnAnInformativeScreen() {
-        val app = compose.activity.application as App
+        val app = RuntimeEnvironment.getApplication() as App
         val old = storedCheck(app, System.currentTimeMillis() - 1)
         ActivityScenario.launch<RingingActivity>(pendingIntent(app, old)).use { scenario ->
             waitForText("Время подтверждения истекло")

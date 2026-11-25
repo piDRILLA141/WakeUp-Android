@@ -119,6 +119,7 @@ jobs:
           set -o pipefail
           ./gradlew :core:test :app:testDebugUnitTest --console=plain 2>&1 | tee -a "$RUNNER_TEMP/podyom-build.log"
       - name: Check emulator availability
+        if: ${{ !cancelled() && steps.binaries.outcome == 'success' }}
         id: emulator
         run: |
           if [ -c /dev/kvm ]; then
@@ -128,7 +129,7 @@ jobs:
             echo "KVM is unavailable on this runner."
           fi
       - name: Run Android 16 instrumentation
-        if: steps.emulator.outputs.available == 'true'
+        if: ${{ !cancelled() && steps.emulator.outputs.available == 'true' }}
         id: instrumentation
         timeout-minutes: 12
         env:
