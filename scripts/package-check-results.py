@@ -11,6 +11,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("output", type=Path)
 parser.add_argument("--build-outcome", required=True)
 parser.add_argument("--build-log", type=Path, required=True)
+parser.add_argument("--emulator-outcome", default="skipped")
 args = parser.parse_args()
 output = args.output
 output.mkdir(parents=True, exist_ok=True)
@@ -19,6 +20,7 @@ for source, target in (
     (Path("app/build/reports"), "app-reports"),
     (Path("core/build/test-results"), "core-test-results"),
     (Path("app/build/test-results"), "app-test-results"),
+    (Path("app/build/outputs/androidTest-results/connected"), "instrumentation-results"),
 ):
     if source.exists():
         shutil.copytree(source, output / target, dirs_exist_ok=True)
@@ -29,8 +31,9 @@ rows = []
 for label, folder in (
     ("Kotlin / JUnit", Path("core/build/test-results/test")),
     ("Android / Robolectric / Compose", Path("app/build/test-results/testDebugUnitTest")),
+    ("Android / эмулятор", Path("app/build/outputs/androidTest-results/connected")),
 ):
-    suites = [ET.parse(path).getroot() for path in sorted(folder.glob("TEST-*.xml"))]
+    suites = [ET.parse(path).getroot() for path in sorted(folder.rglob("TEST-*.xml"))]
     counts = [sum(int(suite.get(key, 0)) for suite in suites)
               for key in ("tests", "failures", "errors", "skipped")]
     rows.append(f"| {label} | " + " | ".join(map(str, counts)) + (" |\n" if suites else " (отчёты отсутствуют) |\n"))
@@ -55,6 +58,8 @@ summary = f"""# Результаты сборки и проверок «Подъ
 """ + "".join(rows) + f"""
 {lint_summary}
 
+Результат инструментальных тестов на эмуляторе: **{args.emulator_outcome}**.
+
 - [Полный журнал сборки](build.log).
 - [HTML тестов ядра](core-reports/tests/test/index.html).
 - [HTML Android/Compose-тестов](app-reports/tests/testDebugUnitTest/index.html).
@@ -63,8 +68,8 @@ summary = f"""# Результаты сборки и проверок «Подъ
 - XML JUnit находится в `core-test-results` и `app-test-results`.
 
 Распакуйте ZIP целиком перед открытием HTML: стили и ресурсы находятся рядом.
-Отчёты созданы этим запуском workflow. Инструментальный тестовый APK собирается,
-но `connectedDebugAndroidTest` на физическом телефоне здесь не запускается.
+Отчёты созданы этим запуском workflow. `connectedDebugAndroidTest` запускается
+на эмуляторе Android при наличии KVM. Физический телефон здесь недоступен.
 Звук, блокировка экрана, Doze, Bluetooth и OriginOS на iQOO 15R требуют проверки
 на самом устройстве. Автоматические тесты не подтверждают эти сценарии.
 """

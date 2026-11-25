@@ -105,12 +105,47 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 30
+      - name: Check emulator availability
+        id: emulator
+        run: |
+          if [ -c /dev/kvm ]; then
+            sudo chmod a+rw /dev/kvm
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "KVM is unavailable on this runner."
+          fi
+      - name: Run Android 16 instrumentation
+        if: steps.emulator.outputs.available == 'true'
+        id: instrumentation
+        timeout-minutes: 12
+        env:
+          PODYOM_KEYSTORE_PASSWORD: ${{ secrets.PODYOM_KEYSTORE_PASSWORD }}
+          PODYOM_KEY_ALIAS: ${{ secrets.PODYOM_KEY_ALIAS }}
+          PODYOM_KEY_PASSWORD: ${{ secrets.PODYOM_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          image='system-images;android-36;google_apis;x86_64'
+          sdkmanager emulator "$image"
+          printf 'no\n' | avdmanager create avd --name podyom-api36 --package "$image" --force
+          "$ANDROID_HOME/emulator/emulator" -avd podyom-api36 -no-window -no-audio -no-snapshot \
+            -gpu swiftshader_indirect -no-boot-anim > "$RUNNER_TEMP/podyom-emulator.log" 2>&1 &
+          emulator_pid=$!
+          trap 'adb emu kill || kill "$emulator_pid" || true' EXIT
+          timeout 210s adb wait-for-device
+          timeout 210s bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = 1 ]; do sleep 2; done'
+          adb shell input keyevent KEYCODE_WAKEUP
+          adb shell wm dismiss-keyguard
+          ./gradlew :app:connectedDebugAndroidTest --console=plain
       - name: Prepare verification reports
         if: always()
         env:
           BUILD_OUTCOME: ${{ steps.build.outcome }}
+          EMULATOR_OUTCOME: ${{ steps.instrumentation.outcome }}
         run: |
-          python3 scripts/package-check-results.py "$RUNNER_TEMP/podyom/results" --build-outcome "$BUILD_OUTCOME" --build-log "$RUNNER_TEMP/podyom-build.log"
+          python3 scripts/package-check-results.py "$RUNNER_TEMP/podyom/results" --build-outcome "$BUILD_OUTCOME" --build-log "$RUNNER_TEMP/podyom-build.log" --emulator-outcome "$EMULATOR_OUTCOME"
+          if [ -f "$RUNNER_TEMP/podyom-emulator.log" ]; then
+            cp "$RUNNER_TEMP/podyom-emulator.log" "$RUNNER_TEMP/podyom/results/"
+          fi
           if [ -d "$RUNNER_TEMP/podyom/signing" ]; then
             cp -r "$RUNNER_TEMP/podyom/signing" "$RUNNER_TEMP/podyom/results/"
           fi
