@@ -42,7 +42,11 @@ class WakeActivityRouteTest {
     }
 
     private fun waitForText(text: String) {
-        compose.waitUntil(10_000) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+        try {
+            compose.waitUntil(8_000) { compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty() }
+        } catch (error: ComposeTimeoutException) {
+            throw AssertionError("Expected: $text. Visible UI: ${compose.onRoot().printToString()}", error)
+        }
     }
 
     @Test fun tappingNotificationOpensItsCheckAfterRecreationAndUsesTheNextIntent() {
@@ -73,8 +77,11 @@ class WakeActivityRouteTest {
 
     @Test fun expiredAndMissingNotificationStayOnAnInformativeScreen() {
         val app = RuntimeEnvironment.getApplication() as App
-        val old = storedCheck(app, System.currentTimeMillis() - 1)
-        Robolectric.buildActivity(RingingActivity::class.java, pendingIntent(app, old)).setup().use { activity ->
+        val old = storedCheck(app, System.currentTimeMillis() - 30_000)
+        val intent = pendingIntent(app, old)
+        assertEquals(old.checkKey, CheckRoute.from(intent)?.key)
+        assertEquals(CheckPage.EXPIRED, checkPage(old.checkKey, listOf(old), System.currentTimeMillis()))
+        Robolectric.buildActivity(RingingActivity::class.java, intent).setup().use { activity ->
             waitForText("Время подтверждения истекло")
             compose.onNodeWithText("ДА, Я ПРОСНУЛСЯ").assertDoesNotExist()
             val missing = old.copy(id = UUID.randomUUID().toString())

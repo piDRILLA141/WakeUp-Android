@@ -141,11 +141,17 @@ jobs:
           image='system-images;android-36;google_apis;x86_64'
           sdkmanager emulator "$image"
           printf 'no\n' | avdmanager create avd --name podyom-api36 --package "$image" --force
+          "$ANDROID_HOME/emulator/emulator" -accel-check
           "$ANDROID_HOME/emulator/emulator" -avd podyom-api36 -no-window -no-audio -no-snapshot \
-            -gpu swiftshader_indirect -no-boot-anim > "$RUNNER_TEMP/podyom-emulator.log" 2>&1 &
+            -gpu software -feature -Vulkan -no-boot-anim > "$RUNNER_TEMP/podyom-emulator.log" 2>&1 &
           emulator_pid=$!
-          trap 'adb emu kill || kill "$emulator_pid" || true' EXIT
-          timeout 210s adb wait-for-device
+          cleanup() {
+            status=$?
+            if [ "$status" -ne 0 ]; then tail -100 "$RUNNER_TEMP/podyom-emulator.log"; fi
+            adb emu kill || kill "$emulator_pid" || true
+          }
+          trap cleanup EXIT
+          timeout 150s bash -c 'until adb get-state 2>/dev/null | grep -qx device; do kill -0 "$1" || exit 1; sleep 2; done' _ "$emulator_pid"
           timeout 210s bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = 1 ]; do sleep 2; done'
           adb shell input keyevent KEYCODE_WAKEUP
           adb shell wm dismiss-keyguard
