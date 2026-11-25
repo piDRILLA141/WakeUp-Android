@@ -25,7 +25,13 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         val anchored = if (next.needsEvent && (next.state != RunState.SCHEDULED || next.plan.quick)) next.copy(
             eventElapsed = if (previous?.eventAt == next.eventAt && previous.bootCount == bootCount() && previous.eventElapsed > 0) previous.eventElapsed
                 else elapsed() + (next.eventAt - now()), bootCount = bootCount()) else next.copy(eventElapsed = 0)
-        dao.putRun(anchored.row())
+        val stored = if (next.sounding) {
+            val boot = bootCount()
+            val deadline = previous?.takeIf { it.sounding && it.bootCount == boot && it.ringingSince == next.ringingSince }
+                ?.ringDeadlineElapsed ?: ringExpiresElapsed(next)
+            anchored.copy(ringDeadlineElapsed = deadline, bootCount = boot)
+        } else anchored.copy(ringDeadlineElapsed = null)
+        dao.putRun(stored.row())
         if (previous?.state != next.state || reason != next.state.name) {
             dao.event(EventRow(runId = next.id, at = now(), type = reason))
             val event = when (next.state) {
@@ -62,10 +68,19 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         app.journal.report(event, id, version, signal.name)
     }
 
+    fun ringExpiresElapsed(run: AlarmRun): Long =
+        run.ringDeadlineElapsed?.takeIf { run.bootCount == bootCount() }
+            ?: (elapsed() + (WakeMachine.ringExpiresAt(run) - now()).coerceAtMost(WakeMachine.RING_LIMIT_MILLIS))
+
+    private fun expireRing(run: AlarmRun, wallTime: Long): AlarmRun {
+        if (!run.sounding || elapsed() < ringExpiresElapsed(run)) return run
+        return WakeMachine.expireRing(run, WakeMachine.ringExpiresAt(run)).copy(updatedAt = wallTime)
+    }
+
     suspend fun expireRings() = mutex.withLock {
         val before = runs()
         val time = now()
-        val expired = before.map { it to WakeMachine.expireRing(it, time) }.filter { (old, new) -> old != new }
+        val expired = before.map { it to expireRing(it, time) }.filter { (old, new) -> old != new }
         if (expired.isNotEmpty()) {
             db.withTransaction { expired.forEach { (old, new) -> put(old, new) } }
             reconcile(before)
@@ -351,7 +366,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         val before = runs()
         val run = before.firstOrNull { it.id == id && it.version == token } ?: return@withLock
         val time = now()
-        val next = WakeMachine.expireRing(WakeMachine.due(run, token, time), time)
+        val next = expireRing(WakeMachine.due(run, token, time), time)
         if (next == run) {
             if (run.needsEvent) app.scheduler.schedule(run)
             return@withLock
@@ -394,8 +409,12 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         val before = runs()
         db.withTransaction {
             before.forEach { run ->
-                val expired = WakeMachine.expireRing(run, now())
-                if (expired != run) put(run, expired)
+                if (run.sounding) {
+                    val expired = expireRing(run, now())
+                    if (expired != run || run.ringDeadlineElapsed == null || run.bootCount != bootCount()) {
+                        put(run, expired)
+                    }
+                }
             }
             if (recalculate) {
                 // A manually changed wall clock must not turn a three-minute check into an hour.

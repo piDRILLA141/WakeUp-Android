@@ -279,6 +279,23 @@ class AlarmEngineTest {
         assertEquals(1, runs().count { it.sounding })
     }
 
+    @Test fun ringingLimitUsesMonotonicTimeAcrossClockChangeAndRestore() = runBlocking {
+        val day = monday(5)
+        var elapsedNow = 100_000L
+        val coordinator = AlarmEngine(app, clock = { clock }, elapsed = { elapsedNow }, zoneId = { testZone })
+        coordinator.save(daily("a"), PrivateAlarm())
+        val current = runs().single()
+        clock = current.eventAt
+        coordinator.event(current.id, current.version)
+        clock += 2 * WakeMachine.RING_LIMIT_MILLIS
+        coordinator.restore(recalculate = true)
+        assertEquals(RunState.RINGING, runs().first { it.id == current.id }.state)
+        elapsedNow += WakeMachine.RING_LIMIT_MILLIS
+        coordinator.expireRings()
+        assertEquals(RunState.MISSED, runs().first { it.id == current.id }.state)
+        assertEquals(1, runs().count { it.state == RunState.SCHEDULED })
+    }
+
     @Test fun laterRingsPreemptAndEndingQueueLeavesFutureAlarmsAndWakeChecks() = runBlocking {
         val day = monday(5)
         val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })

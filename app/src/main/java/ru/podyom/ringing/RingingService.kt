@@ -7,6 +7,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.*
@@ -101,7 +102,8 @@ class RingingService : Service() {
     private suspend fun refresh() {
         val now = System.currentTimeMillis()
         var runs = app.engine.snapshot()
-        if (runs.any { it.sounding && now >= WakeMachine.ringExpiresAt(it) }) {
+        val elapsedNow = SystemClock.elapsedRealtime()
+        if (runs.any { it.sounding && elapsedNow >= app.engine.ringExpiresElapsed(it) }) {
             app.engine.expireRings()
             runs = app.engine.snapshot()
         }
@@ -149,13 +151,13 @@ class RingingService : Service() {
     }
 
     private fun watchExpiration(runs: List<AlarmRun>) {
-        val next = runs.filter { it.sounding }.minOfOrNull(WakeMachine::ringExpiresAt)
+        val next = runs.filter { it.sounding }.minOfOrNull(app.engine::ringExpiresElapsed)
         if (next == expiresAt) return
         expiresAt = next
         expiration?.cancel()
         expiration = next?.let { deadline ->
             scope.launch {
-                delay((deadline - System.currentTimeMillis()).coerceAtLeast(1L))
+                delay((deadline - SystemClock.elapsedRealtime()).coerceAtLeast(1L))
                 commands.withLock {
                     expiration = null
                     expiresAt = null
