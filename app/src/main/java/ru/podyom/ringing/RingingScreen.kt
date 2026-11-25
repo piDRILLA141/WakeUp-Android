@@ -45,10 +45,19 @@ import java.time.format.DateTimeFormatter
     LaunchedEffect(route?.key, run?.plan?.privateKey, unlockRevision) {
         if (route == null) private = run?.let { vm.profile(it.plan.privateKey) }
     }
-    LaunchedEffect(route?.key, run?.deadline) {
+    val showEventCountdown = route == null && (run?.state == RunState.WAITING_WAKE_CHECK || run?.state == RunState.SNOOZED)
+    LaunchedEffect(route?.key, run?.deadline, run?.eventAt, showEventCountdown) {
         now = System.currentTimeMillis()
         val remaining = (run?.deadline ?: 0L) - now
-        if (route != null && remaining > 0) { delay(remaining); now = System.currentTimeMillis() }
+        if (route != null && remaining > 0) {
+            delay(remaining)
+            now = System.currentTimeMillis()
+        } else if (showEventCountdown && run != null) {
+            while (now < run.eventAt) {
+                delay(minOf(1000, run.eventAt - now))
+                now = System.currentTimeMillis()
+            }
+        }
     }
     BackHandler {onClose()} // Leaving the screen never changes the durable state.
     Surface(Modifier.fillMaxSize()) { Column(Modifier.fillMaxSize().systemBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp),verticalArrangement=Arrangement.spacedBy(18.dp)) {

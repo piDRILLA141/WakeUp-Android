@@ -18,6 +18,8 @@ import androidx.core.content.ContextCompat
 import ru.podyom.app
 import ru.podyom.core.*
 import ru.podyom.data.RunRow
+import ru.podyom.data.TechnicalEvent
+import ru.podyom.data.TechnicalRecord
 import ru.podyom.ui.date
 
 @Composable fun ScheduleDiagnostics(runs:List<AlarmRun>,rows:List<RunRow>) {
@@ -37,6 +39,10 @@ import ru.podyom.ui.date
             context.unregisterReceiver(receiver)
         }
     }
+    val latestFailures by produceState(emptyList<TechnicalRecord>(), revision) {
+        value = context.app.journal.recent().filter { it.event == TechnicalEvent.AUDIO_ERROR ||
+            it.event == TechnicalEvent.SCHEDULE_ERROR || it.event == TechnicalEvent.LAUNCH_ERROR }.take(3)
+    }
     val system=remember(revision,runs){context.app.scheduler.nextSystemAlarm()}
     val next=runs.filter {it.state==RunState.SCHEDULED}.minByOrNull {it.eventAt}
     val event=runs.filter {it.needsEvent}.minByOrNull {it.eventAt}
@@ -53,6 +59,18 @@ import ru.podyom.ui.date
         val problems=readinessProblems(context)+rows.map {it.diagnostic}.filter {it.isNotBlank()}.distinct()
         if(event!=null && system==null) Text("Android не сообщает следующее системное событие. Проверьте разрешения и тест звонка.",color=MaterialTheme.colorScheme.error)
         problems.forEach {Text(it,color=MaterialTheme.colorScheme.error)}
+        if (latestFailures.isNotEmpty()) {
+            Text("Последние ошибки", style = MaterialTheme.typography.titleSmall)
+            latestFailures.forEach { failure ->
+                val label = when (failure.event) {
+                    TechnicalEvent.AUDIO_ERROR -> "Звук"
+                    TechnicalEvent.SCHEDULE_ERROR -> "Планирование"
+                    else -> "Открытие экрана"
+                }
+                val code = failure.code?.let { " · $it" }.orEmpty()
+                Text("${date(failure.timestampMs)} · $label$code", style = MaterialTheme.typography.bodySmall)
+            }
+        }
         Text("Значок в строке состояния выбирает Android / OriginOS. Приложение не может принудительно включить его.",style=MaterialTheme.typography.bodySmall)
     }}
 }
