@@ -52,7 +52,7 @@ import java.time.format.DateTimeFormatter
         if (route != null && remaining > 0) {
             delay(remaining)
             now = System.currentTimeMillis()
-        } else if (showEventCountdown && run != null) {
+        } else if (showEventCountdown) {
             while (now < run.eventAt) {
                 delay(minOf(1000, run.eventAt - now))
                 now = System.currentTimeMillis()
