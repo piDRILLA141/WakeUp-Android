@@ -194,6 +194,15 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         reconcile(before)
         CheckConfirmation.ACCEPTED
     }
+    suspend fun cancelCheck(key: CheckKey) = mutex.withLock {
+        val before = runs()
+        val run = before.firstOrNull { it.id == key.runId && key.matches(it) } ?: return@withLock
+        val time = now()
+        if (checkPage(key, listOf(run), time) != CheckPage.ACTIVE) return@withLock
+        db.withTransaction { put(run, WakeMachine.cancel(run, time, emergency = true)) }
+        reconcile(before)
+    }
+
     suspend fun enable(id: String, enabled: Boolean) {
         if (!enabled) {
             disableAll(setOf(id))

@@ -35,10 +35,10 @@ fun remainingText(deadline:Long,now:Long):String {
         TextButton(onClick=onEmergency) {Text("Аварийное завершение")}
     }
 }
-@Composable fun ActiveWakeCheckHost(runs:List<AlarmRun>,confirm:(CheckKey,String)->Unit,cancel:(String)->Unit,excludeId:String?=null,confirming:CheckKey?=null) {
+@Composable fun ActiveWakeCheckHost(runs:List<AlarmRun>,confirm:(CheckKey,String)->Unit,cancel:(CheckKey)->Unit,excludeId:String?=null,confirming:CheckKey?=null) {
     val run = nextActiveCheck(runs, System.currentTimeMillis(), excludeId) ?: return
-    var emergency by rememberSaveable(run.id){mutableStateOf(false)}
-    var phrase by rememberSaveable(run.id){mutableStateOf("")}
+    var emergency by rememberSaveable(run.id, run.cycle, run.checkIndex){mutableStateOf(false)}
+    var phrase by rememberSaveable(run.id, run.cycle, run.checkIndex){mutableStateOf("")}
     var answerError by rememberSaveable(run.id,run.checkIndex,run.cycle){mutableStateOf(false)}
     AlertDialog(onDismissRequest={},confirmButton={},text={Column(Modifier.verticalScroll(rememberScrollState())) {
         WakeCheckPanel(run,{answer->
@@ -50,5 +50,5 @@ fun remainingText(deadline:Long,now:Long):String {
     if(emergency) AlertDialog(onDismissRequest={emergency=false},title={Text("Завершить эту проверку?")},text={Column {
         Text("Введите ЗАВЕРШИТЬ. Остальные будильники сохранятся.")
         OutlinedTextField(phrase,{phrase=it},label={Text("Подтверждение завершения")})
-    }},confirmButton={TextButton(onClick={cancel(run.id);emergency=false},enabled=phrase.trim()=="ЗАВЕРШИТЬ"){Text("Завершить")}},dismissButton={TextButton(onClick={emergency=false}){Text("Вернуться")}})
+    }},confirmButton={TextButton(onClick={cancel(run.checkKey);emergency=false},enabled=phrase.trim()=="ЗАВЕРШИТЬ"){Text("Завершить")}},dismissButton={TextButton(onClick={emergency=false}){Text("Вернуться")}})
 }

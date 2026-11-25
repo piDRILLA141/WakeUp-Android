@@ -35,7 +35,7 @@ import java.time.format.DateTimeFormatter
     val confirming by vm.confirming.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
     var now by remember {mutableLongStateOf(System.currentTimeMillis())}
-    var emergency by rememberSaveable {mutableStateOf(false)}
+    var emergency by rememberSaveable(run?.state, run?.checkIndex, run?.cycle) {mutableStateOf(false)}
     var phrase by rememberSaveable {mutableStateOf("")}
     var queuedConfirmation by rememberSaveable {mutableStateOf(arrayListOf<String>())}
     val queue = RingingPriority.ordered(runs)
@@ -115,7 +115,7 @@ import java.time.format.DateTimeFormatter
         if(!run.terminal) TextButton(onClick={emergency=true}) {Text("Не могу выполнить · аварийное завершение")}
     } }
     if (route == null && run?.state != RunState.WAKE_CHECK_ACTIVE) {
-        ru.podyom.wakecheck.ActiveWakeCheckHost(runs, vm::confirm, vm::cancel, excludeId = id, confirming = confirming)
+        ru.podyom.wakecheck.ActiveWakeCheckHost(runs, vm::confirm, vm::cancelCheck, excludeId = id, confirming = confirming)
     }
     if (queuedConfirmation.isNotEmpty()) AlertDialog(
         onDismissRequest = { queuedConfirmation = arrayListOf() },
@@ -127,7 +127,7 @@ import java.time.format.DateTimeFormatter
         }) { Text("Завершить звонки") } },
         dismissButton = { TextButton(onClick = { queuedConfirmation = arrayListOf() }) { Text("Отмена") } },
     )
-    if(emergency) AlertDialog(onDismissRequest={emergency=false},title={Text("Завершить текущий звонок и проверки?")},text={Column {Text("Если вам плохо или задание недоступно, можно остановиться. Введите «ЗАВЕРШИТЬ». Случай сохранится в истории без штрафов.");OutlinedTextField(phrase,{phrase=it},label={Text("Подтверждение")})}},confirmButton={TextButton(onClick={vm.cancel(id);emergency=false},enabled=phrase.trim()=="ЗАВЕРШИТЬ"){Text("Завершить")}},dismissButton={TextButton(onClick={emergency=false}){Text("Вернуться")}})
+    if(emergency) AlertDialog(onDismissRequest={emergency=false},title={Text("Завершить текущий звонок и проверки?")},text={Column {Text("Если вам плохо или задание недоступно, можно остановиться. Введите «ЗАВЕРШИТЬ». Случай сохранится в истории без штрафов.");OutlinedTextField(phrase,{phrase=it},label={Text("Подтверждение")})}},confirmButton={TextButton(onClick={if (route != null) vm.cancelCheck(route.key) else if (run?.state == RunState.WAKE_CHECK_ACTIVE) vm.cancelCheck(run.checkKey) else vm.cancel(id);emergency=false},enabled=phrase.trim()=="ЗАВЕРШИТЬ"){Text("Завершить")}},dismissButton={TextButton(onClick={emergency=false}){Text("Вернуться")}})
 }
 @Composable private fun MissionPanel(run:AlarmRun,private:PrivateAlarm?,onAnswer:(String)->Unit,onMovement:(Int)->Unit,fallback:()->Unit) {
     val spec=run.mission;val seed=Missions.challengeSeed(run)

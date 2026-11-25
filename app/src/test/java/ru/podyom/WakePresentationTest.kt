@@ -99,6 +99,8 @@ class WakePresentationTest {
         assertEquals(CheckConfirmation.ALREADY_CONFIRMED, engine.confirmWake(first.checkKey))
         assertEquals(RunState.WAKE_CHECK_ACTIVE, app.runtime.dao().run(other.id)!!.model().state)
         assertEquals(CheckConfirmation.CHANGED, engine.confirmWake(other.checkKey.copy(index = 2)))
+        engine.cancelCheck(other.checkKey.copy(index = 0))
+        assertEquals(RunState.WAKE_CHECK_ACTIVE, app.runtime.dao().run(other.id)!!.model().state)
         clock = other.deadline
         assertEquals(CheckConfirmation.EXPIRED, engine.confirmWake(other.checkKey))
     }

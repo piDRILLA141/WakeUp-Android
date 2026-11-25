@@ -120,7 +120,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         messages.emit("Диагностика сохранена")
     }
-    fun cancelCheck(id:String)=action {app.engine.update(id) {r,t->WakeMachine.cancel(r,t,true)}}
+    fun cancelCheck(key: CheckKey) = action { app.engine.cancelCheck(key) }
     fun test(fast: Boolean = false) = action {
         val p = AlarmPlan(UUID.randomUUID().toString(), missions = listOf(MissionSpec(count = 1)), wakeDelaySeconds = if (fast) 10 else 180, confirmSeconds = if(fast) 10 else 100)
         app.engine.save(p, PrivateAlarm(title = if (fast) "Тест проверки пробуждения" else "Тест будильника"), System.currentTimeMillis() + 10_000)

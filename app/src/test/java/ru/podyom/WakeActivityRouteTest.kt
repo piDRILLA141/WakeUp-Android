@@ -59,6 +59,8 @@ class WakeActivityRouteTest {
             val secondIntent = pendingIntent(app, second)
             scenario.onActivity { it.onNewIntent(secondIntent) }
             waitForText("Ответ для подтверждения")
+            scenario.recreate()
+            waitForText("Ответ для подтверждения")
             compose.onNodeWithText("Ответ для подтверждения").performTextReplacement(
                 Missions.math(second.seed + second.cycle + second.checkIndex, 1).answer.toString())
             compose.onNodeWithText("ДА, Я ПРОСНУЛСЯ").performClick()

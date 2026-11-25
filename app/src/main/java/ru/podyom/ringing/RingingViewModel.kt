@@ -27,6 +27,7 @@ class RingingViewModel(application: Application):AndroidViewModel(application) {
     fun fallback(id:String)=action {app.engine.update(id,WakeMachine::fallback)}
     fun snooze(id:String)=action {app.engine.update(id,WakeMachine::snooze)}
     fun cancel(id:String)=action {app.engine.update(id) {r,t->WakeMachine.cancel(r,t,true)}}
+    fun cancelCheck(key: CheckKey) = action { app.engine.cancelCheck(key) }
     fun confirm(key: CheckKey, answer: String) {
         if (!confirming.compareAndSet(null, key)) return
         action {

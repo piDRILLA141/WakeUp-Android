@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.*
+import androidx.core.os.BundleCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ru.podyom.app
 import ru.podyom.core.RingingPriority
@@ -24,7 +25,8 @@ class RingingActivity : ComponentActivity() {
         enableEdgeToEdge()
         setShowWhenLocked(true)
         setTurnScreenOn(true)
-        receive(intent, opened = savedInstanceState == null)
+        val restored = savedInstanceState?.let { BundleCompat.getParcelable(it, "ringingRequest", Intent::class.java) }
+        receive(restored ?: intent, opened = savedInstanceState == null)
         wakeRoute?.let { vm.recordRoute(it, TechnicalEvent.WAKE_ACTIVITY_CREATED) }
         setContent {
             val loaded by vm.runs.collectAsStateWithLifecycle()
@@ -47,6 +49,11 @@ class RingingActivity : ComponentActivity() {
         if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
             wakeRoute?.let { vm.recordRoute(it, TechnicalEvent.WAKE_ACTIVITY_RESUMED) }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putParcelable("ringingRequest", request)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onResume() {
