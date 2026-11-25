@@ -34,24 +34,40 @@ import ru.podyom.app
     val notifications = remember(revision) { NotificationManagerCompat.from(context).areNotificationsEnabled() }
     val exact = remember(revision) { context.app.scheduler.allowed() }
     val full = remember(revision) { Build.VERSION.SDK_INT < 34 || manager.canUseFullScreenIntent() }
-    val channel = remember(revision) { manager.getNotificationChannel(ru.podyom.alarm.AlarmNotifications.RING)?.importance != NotificationManager.IMPORTANCE_NONE && manager.getNotificationChannel(ru.podyom.alarm.AlarmNotifications.CHECK)?.importance != NotificationManager.IMPORTANCE_NONE }
+    val channelNames = remember(revision) { channelReadiness(context) }
+    val overlay = remember(revision) { Settings.canDrawOverlays(context) }
+    val restricted = remember(revision) {
+        if (Build.VERSION.SDK_INT >= 28) context.getSystemService(android.app.ActivityManager::class.java).isBackgroundRestricted
+        else null
+    }
     val battery = remember(revision) { context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName) }
     val audio = context.getSystemService(AudioManager::class.java)
-    val audible = remember(revision) { audio.getStreamVolume(AudioManager.STREAM_ALARM) > 0 }
+    val volume = remember(revision) { audio.getStreamVolume(AudioManager.STREAM_ALARM) }
+    val maxVolume = remember(revision) { audio.getStreamMaxVolume(AudioManager.STREAM_ALARM) }
     fun open(action: String, data: Boolean = false) {
         val intent = Intent(action).apply { if (data) this.data = "package:${context.packageName}".toUri() }
         try { context.startActivity(intent) } catch (_: ActivityNotFoundException) { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:${context.packageName}".toUri())) }
     }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Проверка готовности будильника", style = MaterialTheme.typography.headlineSmall)
-        ReadyRow("Уведомления", notifications && channel, "Нужны для звонка и проверки пробуждения") {
+        ReadyRow("Уведомления", notifications, "Нужны для звонка и проверки пробуждения") {
             if (Build.VERSION.SDK_INT >= 33 && !notifications) request.launch(Manifest.permission.POST_NOTIFICATIONS)
             else context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
         }
         ReadyRow("Точные будильники", exact, "Системное расписание работает при закрытом приложении") { if (Build.VERSION.SDK_INT >= 31) open(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, true) else open(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true) }
         ReadyRow("Полноэкранный показ", full, "Android решает, открыть экран звонка или показать уведомление") { if(Build.VERSION.SDK_INT >= 34) open(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT, true) else open(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, true) }
-        ReadyRow("Энергосбережение", battery, "Проверьте ограничения фоновой работы") { open(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS) }
-        ReadyRow("Громкость будильника", audible, "Не беспокоить и Bluetooth требуют отдельной проверки") { open(Settings.ACTION_SOUND_SETTINGS) }
+        channelNames.forEach { Text(it) }
+        if (ru.podyom.data.enhancedChecks(context)) {
+            ReadyRow("Показ поверх приложений", overlay, "Дополнительный способ открыть усиленную проверку") {
+                open(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, true)
+            }
+        }
+        Text("Исключение из оптимизации батареи: ${if (battery) "да" else "нет"}")
+        Text("Ограничение фоновой работы Android: ${when (restricted) { true -> "включено"; false -> "отключено"; null -> "сведения недоступны" }}")
+        TextButton(onClick = { open(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS) }) { Text("Настройки оптимизации батареи") }
+        ReadyRow("Громкость будильника", volume > 0, "Уровень $volume из $maxVolume. Режим «Не беспокоить» и Bluetooth проверяются отдельно.") {
+            open(Settings.ACTION_SOUND_SETTINGS)
+        }
         OutlinedCard { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("iQOO / OriginOS", style = MaterialTheme.typography.titleMedium)
             Text("Автозапуск и фоновые ограничения: статус не проверяется автоматически. В системных настройках приложения разрешите фоновую работу и автозапуск, если такие пункты доступны. Названия зависят от версии и региона.")
@@ -75,8 +91,23 @@ fun readinessProblems(context: Context): List<String> = buildList {
     if (!context.app.scheduler.allowed()) add("Точное расписание недоступно")
     if (Build.VERSION.SDK_INT >= 34 && !manager.canUseFullScreenIntent()) add("Полноэкранный показ запрещён: звонок доступен через уведомление")
     if (listOf(ru.podyom.alarm.AlarmNotifications.RING, if(ru.podyom.data.enhancedChecks(context)) ru.podyom.alarm.AlarmNotifications.ENHANCED_CHECK else ru.podyom.alarm.AlarmNotifications.CHECK).any {
-        (manager.getNotificationChannel(it)?.importance ?: NotificationManager.IMPORTANCE_HIGH) < NotificationManager.IMPORTANCE_HIGH
+        (manager.getNotificationChannel(it)?.importance ?: NotificationManager.IMPORTANCE_NONE) < NotificationManager.IMPORTANCE_HIGH
     }) add("Важность уведомлений звонка или проверки понижена")
     if (context.getSystemService(AudioManager::class.java).getStreamVolume(AudioManager.STREAM_ALARM) == 0) add("Системная громкость будильника равна нулю")
     if (manager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL) add("Включён режим «Не беспокоить»: проверьте, разрешены ли будильники")
+}
+
+private fun channelReadiness(context: Context): List<String> {
+    val manager = context.getSystemService(NotificationManager::class.java)
+    val channels = ru.podyom.alarm.AlarmNotifications
+    return listOf("Звонок" to channels.RING, "Проверка" to
+        if (ru.podyom.data.enhancedChecks(context)) channels.ENHANCED_CHECK else channels.CHECK).map { (name, id) ->
+        val status = when (manager.getNotificationChannel(id)?.importance) {
+            null -> "канал отсутствует"
+            NotificationManager.IMPORTANCE_NONE -> "канал отключён"
+            NotificationManager.IMPORTANCE_HIGH, NotificationManager.IMPORTANCE_MAX -> "высокая важность"
+            else -> "важность ниже высокой"
+        }
+        "$name · $status"
+    }
 }

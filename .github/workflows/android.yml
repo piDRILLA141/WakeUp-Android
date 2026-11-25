@@ -50,12 +50,12 @@ jobs:
             chmod 600 "$RUNNER_TEMP/podyom-signing.keystore"
             echo "PODYOM_KEYSTORE_PATH=$RUNNER_TEMP/podyom-signing.keystore" >> "$GITHUB_ENV"
           fi
-      - name: Download published 0.2.0 APK for certificate comparison
+      - name: Download published 0.3.0 APK for certificate comparison
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: podyom-debug-apk
-          run-id: 42475718209
+          run-id: 45168411155
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/podyom/previous
       - name: Cache Robolectric Android 16 runtime
@@ -92,9 +92,9 @@ jobs:
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk dist/podyom-debug.apk
           ./scripts/signing-report.sh dist/podyom-debug.apk "$RUNNER_TEMP/podyom/signing" "$RUNNER_TEMP/podyom/previous/podyom-debug.apk"
-          cp docs/UPGRADE_0.3.0.md "$RUNNER_TEMP/podyom/signing/"
+          cp docs/STABILIZATION_0.4.0.md "$RUNNER_TEMP/podyom/signing/"
           cp "$RUNNER_TEMP/podyom/signing/SIGNING.md" dist/
-          cp docs/UPGRADE_0.3.0.md dist/
+          cp docs/STABILIZATION_0.4.0.md dist/
           cd dist
           sha256sum podyom-debug.apk > SHA256SUMS
       - name: Upload installable debug APK

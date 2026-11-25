@@ -11,7 +11,12 @@ import ru.podyom.data.model
 
 class RingingViewModel(application: Application):AndroidViewModel(application) {
     private val app=application as App
-    val runs=app.runtime.dao().observeRuns().map {list->list.map {it.model()}}.stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
+    val runs = app.runtime.dao().observeRuns().map { rows -> rows.map { it.model() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val confirming = MutableStateFlow<CheckKey?>(null)
+    fun recordRoute(route: ru.podyom.wakecheck.CheckRoute, event: ru.podyom.data.TechnicalEvent) {
+        app.journal.report(event, route.key.runId, route.version, route.source)
+    }
     val message=MutableStateFlow("")
     private fun action(block:suspend()->Unit) {viewModelScope.launch {try {block()} catch(e:Exception) {if(e is CancellationException) throw e;message.value=e.message?:"Ошибка действия"}}}
     suspend fun profile(key:String)=app.engine.profile(key)
@@ -22,7 +27,19 @@ class RingingViewModel(application: Application):AndroidViewModel(application) {
     fun fallback(id:String)=action {app.engine.update(id,WakeMachine::fallback)}
     fun snooze(id:String)=action {app.engine.update(id,WakeMachine::snooze)}
     fun cancel(id:String)=action {app.engine.update(id) {r,t->WakeMachine.cancel(r,t,true)}}
-    fun confirm(id:String,answer:String)=action {app.engine.confirmCheck(id,answer);message.value=""}
+    fun confirm(key: CheckKey, answer: String) {
+        if (!confirming.compareAndSet(null, key)) return
+        action {
+            try {
+                message.value = when (app.engine.confirmWake(key, answer)) {
+                    CheckConfirmation.ACCEPTED, CheckConfirmation.ALREADY_CONFIRMED -> "Пробуждение подтверждено"
+                    CheckConfirmation.WRONG_ANSWER -> "Проверьте ответ"
+                    CheckConfirmation.EXPIRED -> "Время подтверждения истекло"
+                    else -> "Эта проверка уже изменилась"
+                }
+            } finally { confirming.value = null }
+        }
+    }
     fun answer(id:String,token:Int,value:String)=action {
         val snapshot=app.runtime.dao().run(id)?.model()?:return@action
         val private=app.engine.profile(snapshot.plan.privateKey)

@@ -11,7 +11,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.delay
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.core.content.ContextCompat
 import ru.podyom.app
 import ru.podyom.core.*
 import ru.podyom.data.RunRow
@@ -20,12 +23,26 @@ import ru.podyom.ui.date
 @Composable fun ScheduleDiagnostics(runs:List<AlarmRun>,rows:List<RunRow>) {
     val context=LocalContext.current
     var revision by remember {mutableIntStateOf(0)}
-    LaunchedEffect(Unit){while(true){delay(1500);revision++}}
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(context, owner) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) { revision++ }
+        }
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) revision++ }
+        owner.lifecycle.addObserver(observer)
+        ContextCompat.registerReceiver(context, receiver,
+            IntentFilter(android.app.AlarmManager.ACTION_NEXT_ALARM_CLOCK_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED)
+        onDispose {
+            owner.lifecycle.removeObserver(observer)
+            context.unregisterReceiver(receiver)
+        }
+    }
     val system=remember(revision,runs){context.app.scheduler.nextSystemAlarm()}
     val next=runs.filter {it.state==RunState.SCHEDULED}.minByOrNull {it.eventAt}
     val event=runs.filter {it.needsEvent}.minByOrNull {it.eventAt}
     OutlinedCard {Column(Modifier.fillMaxWidth().padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
         Text("Системное расписание",style=MaterialTheme.typography.titleLarge)
+        Text("Событий в расписании приложения: ${runs.count { it.needsEvent }}")
         Text("Следующий будильник приложения: ${next?.let {date(it.eventAt)}?:"нет"}")
         Text("Ближайшее событие приложения: ${event?.let {date(it.eventAt)+" · "+ru.podyom.ui.stateLabel(it.state)}?:"нет"}")
         Text("Следующее событие Android: ${system?.let {date(it.triggerTime)}?:"не зарегистрировано"}")
@@ -42,7 +59,12 @@ import ru.podyom.ui.date
 @Composable fun WakeCheckSettings(enhanced:Boolean,onChange:(Boolean)->Unit) {
     val context=LocalContext.current
     var tick by remember {mutableIntStateOf(0)}
-    LaunchedEffect(Unit){while(true){delay(1000);tick++}}
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) tick++ }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
+    }
     Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
         Text("Заметность проверки пробуждения",style=MaterialTheme.typography.titleLarge)
         Text("В 0.2.0 добавлены отдельные каналы активной проверки. Ваши прежние каналы сохранены; проверьте звук и важность новых каналов в настройках уведомлений.",style=MaterialTheme.typography.bodySmall)

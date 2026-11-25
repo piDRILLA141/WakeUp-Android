@@ -64,7 +64,7 @@ import kotlinx.serialization.Serializable
 )
 @Serializable enum class RunState {
     SCHEDULED, RINGING, MISSION_RUNNING, WAITING_WAKE_CHECK, WAKE_CHECK_ACTIVE,
-    RE_RINGING, SNOOZED, COMPLETED, CANCELLED
+    RE_RINGING, SNOOZED, COMPLETED, CANCELLED, MISSED
 }
 @Serializable data class AlarmRun(
     val id: String,
@@ -90,7 +90,7 @@ import kotlinx.serialization.Serializable
     val bootCount: Int = -1,
     val ringingSince: Long? = null,
 ) {
-    val terminal get() = state == RunState.COMPLETED || state == RunState.CANCELLED
+    val terminal get() = state == RunState.COMPLETED || state == RunState.CANCELLED || state == RunState.MISSED
     val sounding get() = state in setOf(RunState.RINGING, RunState.MISSION_RUNNING, RunState.RE_RINGING)
     val needsEvent get() = state in setOf(RunState.SCHEDULED, RunState.SNOOZED, RunState.WAITING_WAKE_CHECK, RunState.WAKE_CHECK_ACTIVE)
     val mission get() = if (fallbackMath) MissionSpec(count = 3) else plan.missions[missionIndex.coerceAtMost(plan.missions.lastIndex)]

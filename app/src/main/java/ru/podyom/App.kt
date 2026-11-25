@@ -14,20 +14,27 @@ class App : Application() {
     val privateDb by lazy { check(unlocked); PrivateDatabase.open(this) }
     val settings by lazy { SettingsStore(this) }
     val scheduler by lazy { AlarmScheduler(this) }
+    val journal by lazy { TechnicalJournal(this) }
+    val foregroundScheduleRestored = java.util.concurrent.atomic.AtomicBoolean(false)
+    val ringingForeground = MutableStateFlow(false)
     val engine by lazy { AlarmEngine(this) }
     val unlocked get() = getSystemService(UserManager::class.java).isUserUnlocked
     val foreground=MutableStateFlow(false)
     private val resumed=mutableSetOf<Activity>()
+    private fun publishForeground() {
+        ringingForeground.value = resumed.any { it is ru.podyom.ringing.RingingActivity }
+        foreground.value = resumed.isNotEmpty()
+    }
     override fun onCreate() {
         super.onCreate(); AlarmNotifications.channels(this)
         registerActivityLifecycleCallbacks(object:ActivityLifecycleCallbacks {
-            override fun onActivityResumed(activity:Activity) {resumed.add(activity);foreground.value=true}
-            override fun onActivityPaused(activity:Activity) {resumed.remove(activity);foreground.value=resumed.isNotEmpty()}
+            override fun onActivityResumed(activity:Activity) {resumed.add(activity);publishForeground()}
+            override fun onActivityPaused(activity:Activity) {resumed.remove(activity);publishForeground()}
             override fun onActivityCreated(activity:Activity,savedInstanceState:Bundle?) {}
             override fun onActivityStarted(activity:Activity) {}
             override fun onActivityStopped(activity:Activity) {}
             override fun onActivitySaveInstanceState(activity:Activity,state:Bundle) {}
-            override fun onActivityDestroyed(activity:Activity) {resumed.remove(activity);foreground.value=resumed.isNotEmpty()}
+            override fun onActivityDestroyed(activity:Activity) {resumed.remove(activity);publishForeground()}
         })
     }
 }

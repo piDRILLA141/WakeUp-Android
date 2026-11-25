@@ -43,6 +43,14 @@ object WakeMachine {
         return r.copy(state = RunState.SNOOZED, snoozes = r.snoozes + 1, missionIndex = 0, progress = 0,
             fallbackMath = false, eventAt = now + r.plan.snoozeSeconds * 1000L).changed(now)
     }
+    const val RING_LIMIT_MILLIS = 60 * 60 * 1000L
+
+    fun ringExpiresAt(run: AlarmRun): Long =
+        (run.ringingSince ?: run.firedAt.takeIf { it > 0 } ?: run.scheduledAt) + RING_LIMIT_MILLIS
+
+    fun expireRing(run: AlarmRun, now: Long): AlarmRun =
+        if (run.sounding && now >= ringExpiresAt(run)) run.copy(state = RunState.MISSED).changed(now) else run
+
     fun cancel(r: AlarmRun, now: Long, emergency: Boolean = false): AlarmRun =
         if (r.terminal) r else r.copy(state = RunState.CANCELLED, emergency = emergency, deadline = 0).changed(now)
 }

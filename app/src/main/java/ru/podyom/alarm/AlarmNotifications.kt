@@ -54,13 +54,22 @@ object AlarmNotifications {
             .putExtra("runId", id).putExtra("followRinging", followRinging).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         if (Build.VERSION.SDK_INT >= 35) ActivityOptions.makeBasic().setPendingIntentCreatorBackgroundActivityStartMode(if (Build.VERSION.SDK_INT >= 36) ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS else ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED).toBundle() else null)
+    fun wakeActivity(context: Context, run: AlarmRun, fullScreen: Boolean = false): PendingIntent {
+        val route = ru.podyom.wakecheck.CheckRoute(run.checkKey, run.version, if (fullScreen) "full_screen" else "notification")
+        return PendingIntent.getActivity(context, 0, route.intent(context),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            if (Build.VERSION.SDK_INT >= 35 && fullScreen) ActivityOptions.makeBasic()
+                .setPendingIntentCreatorBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED).toBundle()
+            else null)
+    }
+
     fun ringing(context: Context, run: AlarmRun? = null, title: String = "Подъём", announce: Boolean = false) =
         NotificationCompat.Builder(context, RING).setSmallIcon(R.drawable.ic_alarm)
             .setContentTitle(title).setContentText(if (run == null) "Подготовка звонка…" else "Пора вставать · нажмите, чтобы выполнить задание")
             .setCategory(NotificationCompat.CATEGORY_ALARM).setPriority(NotificationCompat.PRIORITY_MAX)
             .setOngoing(true).setVisibility(NotificationCompat.VISIBILITY_PUBLIC).setOnlyAlertOnce(!announce)
             .apply { if (run != null) { val open = activity(context, run.id, followRinging = true); setContentIntent(open); setFullScreenIntent(open, true) } }.build()
-    fun refreshChecks(context: Context, runs: List<AlarmRun>) {
+    fun refreshChecks(context: Context, runs: List<AlarmRun>, internalHostVisible: Boolean = false) {
         val manager = context.getSystemService(NotificationManager::class.java)
         runs.forEach { r ->
             val active = r.state == RunState.WAKE_CHECK_ACTIVE
@@ -73,26 +82,34 @@ object AlarmNotifications {
                 .setSmallIcon(R.drawable.ic_alarm).setOngoing(true).setCategory(NotificationCompat.CATEGORY_ALARM)
                 .setContentTitle(if (active) "Ты точно проснулся?" else if (r.state == RunState.SNOOZED) "Будильник отложен" else "Проверка пробуждения запланирована")
                 .setContentText(if (active) "Подтверди пробуждение, чтобы будильник не повторился" else "Следующее событие в ${java.text.SimpleDateFormat("HH:mm", java.util.Locale.forLanguageTag("ru")).format(java.util.Date(r.eventAt))}")
-                .setContentIntent(activity(context, r.id)).setOnlyAlertOnce(true)
+                .setContentIntent(if (active) wakeActivity(context, r) else activity(context, r.id)).setOnlyAlertOnce(true)
             if(active) {
                 builder.setPriority(NotificationCompat.PRIORITY_MAX).setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                     .setStyle(NotificationCompat.BigTextStyle().bigText("Подтверди пробуждение, чтобы будильник не повторился. Если не подтвердить, сигнал повторится."))
                     .setWhen(r.deadline).setUsesChronometer(true).setChronometerCountDown(true)
-                if(Build.VERSION.SDK_INT<34 || manager.canUseFullScreenIntent()) builder.setFullScreenIntent(activity(context,r.id),true)
-                val confirm=if(r.plan.strictCheck) activity(context,r.id) else PendingIntent.getBroadcast(context,0,
+                if (!internalHostVisible && (Build.VERSION.SDK_INT < 34 || manager.canUseFullScreenIntent())) {
+                    builder.setFullScreenIntent(wakeActivity(context, r, fullScreen = true), true)
+                }
+                val confirm=if(r.plan.strictCheck) wakeActivity(context, r) else PendingIntent.getBroadcast(context,0,
                     Intent(context,AlarmReceiver::class.java).setAction("ru.podyom.CONFIRM_WAKE")
-                        .setData("podyom://confirm/${r.id}/${r.version}".toUri()).putExtra("runId",r.id).putExtra("version",r.version),
+                        .setData("podyom://confirm/${r.id}/${r.cycle}/${r.checkIndex}".toUri()).putExtra("runId",r.id).putExtra("version",r.version)
+                        .putExtra("checkCycle", r.cycle).putExtra("checkIndex", r.checkIndex),
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                 builder.addAction(0,if(r.plan.strictCheck) "Выполнить проверку" else "ДА, Я ПРОСНУЛСЯ",confirm)
-                builder.addAction(0,"Открыть",activity(context,r.id))
+                builder.addAction(0,"Открыть",wakeActivity(context, r))
             }
             try { manager.notify(r.id, if(active) 43 else 42, builder.build()) } catch (_: SecurityException) { }
         }
     }
+    fun cancelChecks(context: Context, ids: List<String>) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        ids.forEach { id -> manager.cancel(id, 42); manager.cancel(id, 43) }
+    }
+
     fun checkForeground(context:Context,run:AlarmRun) = NotificationCompat.Builder(context,STATUS)
         .setSmallIcon(R.drawable.ic_alarm).setContentTitle("Проверка пробуждения активна")
         .setContentText("Осталось подтвердить пробуждение").setOngoing(true).setOnlyAlertOnce(true)
-        .setContentIntent(activity(context,run.id)).build()
+        .setContentIntent(wakeActivity(context, run)).build()
     fun audioFailure(context: Context, id: String, message: String) {
         val manager = context.getSystemService(NotificationManager::class.java)
         runCatching {

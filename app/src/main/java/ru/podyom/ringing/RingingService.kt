@@ -15,8 +15,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import ru.podyom.alarm.AlarmNotifications
 import ru.podyom.app
-import ru.podyom.core.RingingPriority
-import ru.podyom.core.RunState
+import ru.podyom.core.*
+import ru.podyom.data.TechnicalEvent
 import ru.podyom.wakecheck.WakeCheckOverlay
 
 class RingingService : Service() {
@@ -24,7 +24,10 @@ class RingingService : Service() {
     private lateinit var audio: AlarmAudio
     private lateinit var overlay: WakeCheckOverlay
     private var activeId: String? = null
-    private var publishedCheckId: String? = null
+    private var publishedCheck: Pair<CheckKey, Int>? = null
+    private var expiration: Job? = null
+    private var expiresAt: Long? = null
+    private var audioVersion = 0
     private var observer: Job? = null
     private val commands = Mutex()
     private var inFlight = 0
@@ -42,9 +45,7 @@ class RingingService : Service() {
         ServiceCompat.startForeground(this, AlarmNotifications.SERVICE_ID, AlarmNotifications.ringing(this),
             if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED else 0)
         audio = AlarmAudio(this, scope) { id, signal ->
-            scope.launch {
-                runCatching { app.engine.recordAudio(id, signal) }
-            }
+            app.engine.recordAudio(id, audioVersion, signal)
             if (id == activeId) {
                 signal.detail?.let { AlarmNotifications.audioFailure(this, id, it) }
                 if (signal == AudioSignal.PLAYBACK_STARTED &&
@@ -71,7 +72,7 @@ class RingingService : Service() {
                 try {
                     val id = intent?.getStringExtra("runId")
                     when {
-                        id == null -> app.engine.restore()
+                        id == null -> app.engine.restore(recoverSound = false)
                         intent?.getBooleanExtra("confirmWake", false) == true ->
                             app.engine.confirmCheck(id, expectedVersion = intent.getIntExtra("version", -1))
                         else -> app.engine.event(id, intent?.getIntExtra("version", -1) ?: -1)
@@ -92,15 +93,21 @@ class RingingService : Service() {
 
     private fun observe() {
         observer = scope.launch {
-            combine(app.runtime.dao().observeRuns(), app.foreground) { _, _ -> Unit }
+            combine(app.runtime.dao().observeLiveRuns(), app.foreground) { _, _ -> Unit }
                 .collect { commands.withLock { refresh() } }
         }
     }
 
     private suspend fun refresh() {
-        val runs = app.engine.snapshot()
+        val now = System.currentTimeMillis()
+        var runs = app.engine.snapshot()
+        if (runs.any { it.sounding && now >= WakeMachine.ringExpiresAt(it) }) {
+            app.engine.expireRings()
+            runs = app.engine.snapshot()
+        }
         val selected = RingingPriority.next(runs)
-        val check = runs.filter { it.state == RunState.WAKE_CHECK_ACTIVE }.minByOrNull { it.deadline }
+        val check = nextActiveCheck(runs, now)
+        watchExpiration(runs)
         overlay.refresh(check, app.foreground.value)
 
         if (selected == null) {
@@ -111,8 +118,8 @@ class RingingService : Service() {
             }
             if (inFlight > 0) return
             if (check != null) {
-                if (publishedCheckId != check.id) {
-                    publishedCheckId = check.id
+                if (publishedCheck != (check.checkKey to check.version)) {
+                    publishedCheck = check.checkKey to check.version
                     notifications.notify(AlarmNotifications.SERVICE_ID, AlarmNotifications.checkForeground(this, check))
                 }
             } else {
@@ -122,7 +129,8 @@ class RingingService : Service() {
             return
         }
 
-        publishedCheckId = null
+        publishedCheck = null
+        audioVersion = selected.version
         if (activeId == selected.id) {
             audio.update(selected)
             return
@@ -132,11 +140,29 @@ class RingingService : Service() {
         audio.stop()
         AlarmNotifications.clearAudioFailure(this)
         activeId = selected.id
-        val profile = app.engine.profile(selected.plan.privateKey)
+        val profile = runCatching { app.engine.profile(selected.plan.privateKey) }.getOrNull()
+        app.journal.report(TechnicalEvent.RING_PRIORITY_CHANGED, selected.id, selected.version)
         audio.start(selected, profile)
         notifications.notify(AlarmNotifications.SERVICE_ID, AlarmNotifications.ringing(
             this, selected, profile?.title ?: "Подъём · разблокируйте телефон", announce = true,
         ))
+    }
+
+    private fun watchExpiration(runs: List<AlarmRun>) {
+        val next = runs.filter { it.sounding }.minOfOrNull(WakeMachine::ringExpiresAt)
+        if (next == expiresAt) return
+        expiresAt = next
+        expiration?.cancel()
+        expiration = next?.let { deadline ->
+            scope.launch {
+                delay((deadline - System.currentTimeMillis()).coerceAtLeast(1L))
+                commands.withLock {
+                    expiration = null
+                    expiresAt = null
+                    refresh()
+                }
+            }
+        }
     }
 
     override fun onDestroy() {

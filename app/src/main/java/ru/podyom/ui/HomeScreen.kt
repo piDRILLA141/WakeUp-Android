@@ -21,6 +21,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import ru.podyom.wakecheck.CheckRoute
 import kotlinx.coroutines.delay
 import ru.podyom.BuildConfig
 import ru.podyom.core.*
@@ -67,11 +69,23 @@ import java.util.UUID
     BackHandler(selecting && !busy) { selectedIds = arrayListOf() }
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) { while(true) { now = System.currentTimeMillis(); delay(1000) } }
+    val calendarNow = remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    LaunchedEffect(lifecycle) {
+        lifecycle.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (true) {
+                val now = System.currentTimeMillis()
+                calendarNow.longValue = now
+                delay(60_000L - Math.floorMod(now, 60_000L))
+            }
+        }
+    }
     LaunchedEffect(vm) { vm.messages.collect { snackbar.showSnackbar(it) } }
     LaunchedEffect(settings.readySeen) { if(!settings.readySeen) readiness = true }
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { it?.let(vm::export) }
+    val diagnosticsExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) {
+        it?.let(vm::exportDiagnostics)
+    }
     val import = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(vm::import) }
     val tabs = listOf("Будильники", "Сон", "Статистика", "Настройки")
     val icons = listOf(Icons.Outlined.Alarm, Icons.Outlined.Bedtime, Icons.Outlined.Insights, Icons.Outlined.Settings)
@@ -89,6 +103,7 @@ import java.util.UUID
         LazyColumn(Modifier.fillMaxSize().padding(padding).imePadding(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (readiness) {
                 item { Readiness() }
+                item { ru.podyom.permissions.ScheduleDiagnostics(runs, rows) }
                 item { Button(onClick = { vm.test() }, modifier = Modifier.fillMaxWidth()) { Text("Проверить будильник через 10 секунд") } }
                 item { OutlinedButton(onClick = { readiness = false; vm.seen() }, modifier = Modifier.fillMaxWidth()) { Text("Перейти к будильникам") } }
             } else when(tab) {
@@ -98,7 +113,7 @@ import java.util.UUID
                         Text(when(hour) { in 5..11 -> "Доброе утро"; in 12..17 -> "Добрый день"; else -> "Добрый вечер" }, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.height(8.dp)); Text("Начни свой день", style = MaterialTheme.typography.headlineLarge)
                         val nearest = runs.filter { it.state == RunState.SCHEDULED }.minByOrNull { it.eventAt }
-                        Text(nearest?.let { "Следующий будильник через ${duration(it.eventAt - now)}" } ?: "Время для нового утра", style = MaterialTheme.typography.bodyLarge)
+                        Text(nearest?.let { "Следующий будильник через ${duration(it.eventAt - calendarNow.longValue)}" } ?: "Время для нового утра", style = MaterialTheme.typography.bodyLarge)
                     }
                     if (selecting) item {
                         Button(onClick = { openSchedule(selectedIds, "skip") }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
@@ -126,7 +141,7 @@ import java.util.UUID
                     }
                     if (!selecting && runs.any { !it.terminal && it.state != RunState.SCHEDULED }) {
                         items(runs.filter { !it.terminal && it.state != RunState.SCHEDULED }, key = { "active-${it.id}" }) { run ->
-                            Card(onClick = { context.startActivity(Intent(context, RingingActivity::class.java).putExtra("runId", run.id)) }, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                            Card(onClick = { context.startActivity(if (run.state == RunState.WAKE_CHECK_ACTIVE) CheckRoute(run.checkKey, run.version, "list").intent(context) else Intent(context, RingingActivity::class.java).putExtra("runId", run.id)) }, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
                                 Column(Modifier.fillMaxWidth().padding(20.dp)) {
                                     val status = when {
                                         run.sounding && run.id != ringing.firstOrNull()?.id -> "В очереди · не завершён"
@@ -136,7 +151,7 @@ import java.util.UUID
                                     Text(status, style = MaterialTheme.typography.titleLarge)
                                     Text(date(run.ringingSince ?: run.scheduledAt), style = MaterialTheme.typography.bodySmall)
                                     Text(profiles[run.plan.privateKey]?.title ?: "Подъём")
-                                    if(run.needsEvent) Text("Через ${duration(run.eventAt - now)}")
+                                    if(run.needsEvent) Text("Через ${duration(run.eventAt - calendarNow.longValue)}")
                                     Text("Открыть", color = MaterialTheme.colorScheme.primary)
                                 }
                             }
@@ -146,7 +161,7 @@ import java.util.UUID
                     items(alarms.sortedBy { p -> runs.firstOrNull { it.plan.id == p.id && it.state == RunState.SCHEDULED }?.eventAt ?: Long.MAX_VALUE }, key = { it.id }) { alarm ->
                         val profile = profiles[alarm.privateKey] ?: PrivateAlarm()
                         val next = runs.firstOrNull { it.plan.id == alarm.id && it.state == RunState.SCHEDULED }
-                        val today = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate()
+                        val today = Instant.ofEpochMilli(calendarNow.longValue).atZone(ZoneId.systemDefault()).toLocalDate()
                         AlarmCard(alarm, profile, settings.clock24, next, today, selecting, alarm.id in selectedIds,
                             edit = { if (selecting) select(alarm.id) else editor = alarm.id },
                             longPress = { select(alarm.id) }, toggle = { enabled ->
@@ -161,15 +176,15 @@ import java.util.UUID
                     item { Text("Время восстановиться", style = MaterialTheme.typography.headlineLarge); Text("Ручной дневник сна. Только ваши отметки.") }
                     item { val current = nights.firstOrNull { it.ended == 0L }; Card { Column(Modifier.fillMaxWidth().padding(24.dp)) { Text(if(current == null) "Спокойной ночи" else "Сон начался ${date(current.started)}", style = MaterialTheme.typography.titleLarge); Button(onClick = vm::toggleSleep) { Text(if(current == null) "Начать сон" else "Я проснулся") } } } }
                     val completed = nights.filter { it.ended > 0 }
-                    item { val week = completed.filter { it.started > now - 7 * 86400000L }; Text("Среднее за неделю: ${if(week.isEmpty()) "пока нет данных" else duration(week.map { it.ended-it.started }.average().toLong())}"); MiniBars(completed.take(7).reversed().map { (it.ended-it.started).toFloat() }) }
+                    item { val week = completed.filter { it.started > calendarNow.longValue - 7 * 86400000L }; Text("Среднее за неделю: ${if(week.isEmpty()) "пока нет данных" else duration(week.map { it.ended-it.started }.average().toLong())}"); MiniBars(completed.take(7).reversed().map { (it.ended-it.started).toFloat() }) }
                     items(completed.take(30), key = { it.started }) { night -> Card { Row(Modifier.fillMaxWidth().padding(20.dp), horizontalArrangement = Arrangement.SpaceBetween) { Text(date(night.started)); Text(duration(night.ended-night.started), color = MaterialTheme.colorScheme.primary) } } }
                     item { Text("Запись микрофона и определение фаз сна не используются.", style = MaterialTheme.typography.bodySmall) }
                 }
                 2 -> {
                     item { Text("Твои пробуждения", style = MaterialTheme.typography.headlineLarge); Text("Статистика взаимодействий, а не оценка физиологического бодрствования.") }
-                    item { var days by rememberSaveable { mutableIntStateOf(7) }; Row { listOf(7,30).forEach { n -> FilterChip(selected = days == n, onClick = { days=n }, label = { Text("$n дней") }, modifier = Modifier.padding(end=8.dp)) } }; val recent = runs.filter { it.firedAt >= now - days*86400000L && it.firedAt > 0 }; StatsCard(recent); MiniBars((days-1 downTo 0).map { back -> val d = LocalDate.now().minusDays(back.toLong()); recent.count { Instant.ofEpochMilli(it.firedAt).atZone(ZoneId.systemDefault()).toLocalDate() == d }.toFloat() }) }
+                    item { var days by rememberSaveable { mutableIntStateOf(7) }; Row { listOf(7,30).forEach { n -> FilterChip(selected = days == n, onClick = { days=n }, label = { Text("$n дней") }, modifier = Modifier.padding(end=8.dp)) } }; val recent = runs.filter { it.firedAt >= calendarNow.longValue - days*86400000L && it.firedAt > 0 }; StatsCard(recent); MiniBars((days-1 downTo 0).map { back -> val d = LocalDate.now().minusDays(back.toLong()); recent.count { Instant.ofEpochMilli(it.firedAt).atZone(ZoneId.systemDefault()).toLocalDate() == d }.toFloat() }) }
                     item { ru.podyom.statistics.WakeCalendar(runs) }
-                    items(runs.filter { it.firedAt > 0 || it.state == RunState.CANCELLED }.sortedByDescending { it.updatedAt }.take(50), key={it.id}) { r -> Card { Column(Modifier.fillMaxWidth().padding(16.dp)) { Text(date(r.updatedAt)); Text(stateLabel(r.state)); Text("Повторы: ${r.cycle} · Отложено: ${r.snoozes} · Без ответа: ${r.missedChecks}", style = MaterialTheme.typography.bodySmall); if(r.emergency) Text("Аварийное завершение", color = MaterialTheme.colorScheme.tertiary) } } }
+                    items(runs.filter { it.firedAt > 0 || it.state in setOf(RunState.CANCELLED, RunState.MISSED) }.sortedByDescending { it.updatedAt }.take(50), key={it.id}) { r -> Card { Column(Modifier.fillMaxWidth().padding(16.dp)) { Text(date(r.updatedAt)); Text(stateLabel(r.state)); Text("Повторы: ${r.cycle} · Отложено: ${r.snoozes} · Без ответа: ${r.missedChecks}", style = MaterialTheme.typography.bodySmall); if(r.emergency) Text("Аварийное завершение", color = MaterialTheme.colorScheme.tertiary) } } }
                 }
                 3 -> {
                     item { Text("Как тебе удобно", style = MaterialTheme.typography.headlineLarge) }
@@ -181,13 +196,18 @@ import java.util.UUID
                             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Text("Диагностика звука", style = MaterialTheme.typography.titleMedium)
                                 audioEvents.forEach { event ->
-                                    val signal = AudioSignal.entries.firstOrNull { "AUDIO_${it.name}" == event.type }
-                                    if (signal != null) Text("${date(event.at)} · ${audioLabel(signal)}", style = MaterialTheme.typography.bodySmall)
+                                    val signal = AudioSignal.entries.firstOrNull { it.name == event.code }
+                                    if (signal != null) Text("${date(event.timestampMs)} · ${audioLabel(signal)}", style = MaterialTheme.typography.bodySmall)
                                 }
                             }
                         }
                     }
                     item { Text("Язык: русский\nКнопки громкости: системное управление потоком будильника", style = MaterialTheme.typography.bodyMedium) }
+                    item {
+                        OutlinedButton(onClick = { diagnosticsExport.launch("podyom-diagnostics.json") }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Экспорт диагностики")
+                        }
+                    }
                     item { Button(onClick = { readiness = true }, modifier = Modifier.fillMaxWidth()) { Text("Проверка разрешений") } }
                     item { OutlinedButton(onClick = { vm.test() }, modifier = Modifier.fillMaxWidth()) { Text("Будильник через 10 секунд") } }
                     if(BuildConfig.DEBUG) item { OutlinedButton(onClick = { vm.test(true) }, modifier = Modifier.fillMaxWidth()) { Text("Тест Wake Up Check · 10 / 10 секунд") } }
@@ -200,7 +220,7 @@ import java.util.UUID
     }
     if (scheduleOption.isNotEmpty()) {
         val zone = ZoneId.systemDefault()
-        val tomorrow = Instant.ofEpochMilli(now).atZone(zone).toLocalDate().plusDays(1)
+        val tomorrow = Instant.ofEpochMilli(calendarNow.longValue).atZone(zone).toLocalDate().plusDays(1)
         val eligible = alarms.filter { plan ->
             plan.id in scheduleIds && plan.enabled && tomorrow.toEpochDay() !in plan.skipEpochDays &&
                 Schedule.hasOccurrenceOn(plan, tomorrow, zone,
@@ -242,7 +262,11 @@ import java.util.UUID
         AlarmEditor(initialPlan, initialProfile, onClose = { editor = null }, onSave = { p, private -> vm.save(p, private) { editor = null } })
     }
     confirm?.let { (text, action) -> AlertDialog(onDismissRequest = { confirm = null }, title = { Text("Подтвердите действие") }, text = { Text(text) }, confirmButton = { TextButton(onClick = { action(); confirm = null }) { Text("Подтвердить") } }, dismissButton = { TextButton(onClick = { confirm = null }) { Text("Отмена") } }) }
-    ru.podyom.wakecheck.ActiveWakeCheckHost(runs,vm::confirmCheck,vm::cancelCheck)
+    val ringingForeground by vm.ringingForeground.collectAsStateWithLifecycle()
+    val confirming by vm.confirmingCheck.collectAsStateWithLifecycle()
+    if (!ringingForeground) {
+        ru.podyom.wakecheck.ActiveWakeCheckHost(runs, vm::confirmCheck, vm::cancelCheck, confirming = confirming)
+    }
 }
 @Composable fun ToggleRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit) { Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { Text(title, Modifier.weight(1f)); Switch(checked, onChange) } }
 @Composable
@@ -324,4 +348,4 @@ private fun audioLabel(signal: AudioSignal): String = when (signal) {
 @Composable private fun StatsCard(runs: List<AlarmRun>) { Card { Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("Сработало: ${runs.size}"); Text("Подтверждено: ${runs.count { it.state == RunState.COMPLETED && it.plan.wakeCheck }}"); Text("Повторных звонков: ${runs.sumOf { it.cycle }}"); Text("Откладываний: ${runs.sumOf { it.snoozes }}"); Text("Без ответа на проверку: ${runs.sumOf { it.missedChecks }}"); val times = runs.filter { it.missionFinishedAt > it.firedAt }.map { it.missionFinishedAt-it.firedAt }; Text("Среднее время до выполнения: ${if(times.isEmpty()) "нет данных" else duration(times.average().toLong())}") } } }
 @Composable private fun MiniBars(values: List<Float>) { val color = MaterialTheme.colorScheme.primary; Canvas(Modifier.fillMaxWidth().height(90.dp).padding(vertical=12.dp)) { if(values.isNotEmpty()) { val step = size.width/values.size; val max = (values.maxOrNull() ?: 1f).coerceAtLeast(1f); values.forEachIndexed { i, v -> drawLine(color, Offset(step*(i+.5f), size.height), Offset(step*(i+.5f), size.height*(1-v/max)), strokeWidth=step*.5f) } } } }
 fun date(millis: Long): String = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("d MMM · HH:mm", java.util.Locale.forLanguageTag("ru")))
-fun stateLabel(s: RunState) = when(s) { RunState.SCHEDULED -> "Запланирован"; RunState.RINGING -> "Пора вставать"; RunState.MISSION_RUNNING -> "Задание выполняется"; RunState.WAITING_WAKE_CHECK -> "Проверка впереди"; RunState.WAKE_CHECK_ACTIVE -> "Ты точно проснулся?"; RunState.RE_RINGING -> "Повторный звонок"; RunState.SNOOZED -> "Отложен"; RunState.COMPLETED -> "Завершён"; RunState.CANCELLED -> "Отменён" }
+fun stateLabel(s: RunState) = when(s) { RunState.SCHEDULED -> "Запланирован"; RunState.RINGING -> "Пора вставать"; RunState.MISSION_RUNNING -> "Задание выполняется"; RunState.WAITING_WAKE_CHECK -> "Проверка впереди"; RunState.WAKE_CHECK_ACTIVE -> "Ты точно проснулся?"; RunState.RE_RINGING -> "Повторный звонок"; RunState.SNOOZED -> "Отложен"; RunState.COMPLETED -> "Завершён"; RunState.CANCELLED -> "Отменён"; RunState.MISSED -> "Пропущен" }

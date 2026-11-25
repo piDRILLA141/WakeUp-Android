@@ -14,5 +14,5 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState); enableEdgeToEdge()
         setContent { val settings by vm.settings.collectAsStateWithLifecycle(); PodyomTheme(settings.light) { HomeScreen(vm) } }
     }
-    override fun onResume() { super.onResume(); vm.restore() }
+    override fun onStart() { super.onStart(); vm.restoreOnce() }
 }

@@ -27,7 +27,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val sleep = app.privateDb.dao().sleep().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     fun action(block: suspend () -> Unit) { viewModelScope.launch { try { block() } catch (e: Exception) { if(e is CancellationException) throw e; messages.emit(e.message ?: "Не удалось выполнить действие") } } }
-    fun restore() = action { app.engine.restore() }
+    fun restoreOnce() {
+        if (app.foregroundScheduleRestored.compareAndSet(false, true)) {
+            action {
+                try { app.engine.restore() }
+                catch (e: Exception) { app.foregroundScheduleRestored.set(false); throw e }
+            }
+        }
+    }
     fun save(plan: AlarmPlan, profile: PrivateAlarm, done: () -> Unit) = action {
         app.engine.save(plan, profile)
         val next = app.runtime.dao().runs().map { it.model() }.firstOrNull { it.plan.id == plan.id && it.state == RunState.SCHEDULED }
@@ -40,7 +47,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val scheduleBusy = MutableStateFlow(false)
     val scheduleCompleted = MutableStateFlow(0)
     val audioEvents = app.runtime.dao().observeEvents().map { events ->
-        events.filter { it.type.startsWith("AUDIO_") }.take(12)
+        events.mapNotNull(TechnicalJournal::decode).filter { it.event.name.startsWith("AUDIO_") }.take(12)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private fun scheduleAction(block: suspend () -> Unit) {
@@ -85,8 +92,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val plan=app.engine.quick() ?: return@action
         messages.emit("Будильник «Через 20 минут» добавлен на " + java.time.Instant.ofEpochMilli(plan.oneShotAt!!).atZone(java.time.ZoneId.systemDefault()).format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")))
     }
-    fun enhanced(value:Boolean)=action {app.settings.enhanced(value);app.engine.restore()}
-    fun confirmCheck(id:String,answer:String)=action {app.engine.confirmCheck(id,answer)}
+    fun enhanced(value:Boolean)=action {app.settings.enhanced(value);app.engine.refreshPresentation()}
+    val confirmingCheck = MutableStateFlow<CheckKey?>(null)
+    val ringingForeground = app.ringingForeground
+
+    fun confirmCheck(key: CheckKey, answer: String) {
+        if (!confirmingCheck.compareAndSet(null, key)) return
+        action {
+            try {
+                messages.emit(when (app.engine.confirmWake(key, answer)) {
+                    CheckConfirmation.ACCEPTED, CheckConfirmation.ALREADY_CONFIRMED -> "Пробуждение подтверждено"
+                    CheckConfirmation.WRONG_ANSWER -> "Проверьте ответ"
+                    CheckConfirmation.EXPIRED -> "Время подтверждения истекло"
+                    else -> "Эта проверка уже изменилась"
+                })
+            } finally { confirmingCheck.value = null }
+        }
+    }
+
+    fun exportDiagnostics(uri: Uri) = action {
+        val report = withContext(Dispatchers.IO) {
+            codec.encodeToString(app.journal.recent())
+        }
+        withContext(Dispatchers.IO) {
+            val output = app.contentResolver.openOutputStream(uri) ?: error("Файл недоступен")
+            output.bufferedWriter().use { it.write(report) }
+        }
+        messages.emit("Диагностика сохранена")
+    }
     fun cancelCheck(id:String)=action {app.engine.update(id) {r,t->WakeMachine.cancel(r,t,true)}}
     fun test(fast: Boolean = false) = action {
         val p = AlarmPlan(UUID.randomUUID().toString(), missions = listOf(MissionSpec(count = 1)), wakeDelaySeconds = if (fast) 10 else 180, confirmSeconds = if(fast) 10 else 100)

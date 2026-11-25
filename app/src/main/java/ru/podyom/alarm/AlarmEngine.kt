@@ -20,20 +20,56 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
     private val dao get() = db.dao()
     private fun now() = clock()
     private fun bootCount() = android.provider.Settings.Global.getInt(app.contentResolver, android.provider.Settings.Global.BOOT_COUNT, 0)
-    private suspend fun runs() = dao.runs().map { it.model() }
+    private suspend fun runs() = dao.liveRuns().map { it.model() }
     private suspend fun put(previous: AlarmRun?, next: AlarmRun, reason: String = next.state.name) {
         val anchored = if (next.needsEvent && (next.state != RunState.SCHEDULED || next.plan.quick)) next.copy(
             eventElapsed = if (previous?.eventAt == next.eventAt && previous.bootCount == bootCount() && previous.eventElapsed > 0) previous.eventElapsed
                 else elapsed() + (next.eventAt - now()), bootCount = bootCount()) else next.copy(eventElapsed = 0)
         dao.putRun(anchored.row())
-        if (previous?.state != next.state || reason != next.state.name) dao.event(EventRow(runId = next.id, at = now(), type = reason))
+        if (previous?.state != next.state || reason != next.state.name) {
+            dao.event(EventRow(runId = next.id, at = now(), type = reason))
+            val event = when (next.state) {
+                RunState.SCHEDULED -> TechnicalEvent.ALARM_SCHEDULED
+                RunState.RINGING -> TechnicalEvent.RING_STARTED
+                RunState.RE_RINGING -> TechnicalEvent.RE_RING_STARTED
+                RunState.WAITING_WAKE_CHECK -> TechnicalEvent.WAKE_CHECK_SCHEDULED
+                RunState.WAKE_CHECK_ACTIVE -> TechnicalEvent.WAKE_CHECK_STARTED
+                RunState.MISSED -> TechnicalEvent.ALARM_MISSED
+                else -> null
+            }
+            val journal = app.journal
+            if (event != null) journal.record(event, next)
+            if (previous?.state == RunState.MISSION_RUNNING &&
+                next.state in setOf(RunState.WAITING_WAKE_CHECK, RunState.COMPLETED)) {
+                journal.record(TechnicalEvent.MISSION_COMPLETED, next)
+            }
+            if (next.state == RunState.RE_RINGING) journal.record(TechnicalEvent.WAKE_CHECK_EXPIRED, next)
+        }
     }
     private fun occurrence(plan: AlarmPlan, at: Long) = AlarmRun(UUID.randomUUID().toString(), plan, at)
 
     private suspend fun create(plan: AlarmPlan, at: Long) = put(null, occurrence(plan, at))
 
-    suspend fun recordAudio(id: String, signal: AudioSignal) {
-        dao.event(EventRow(runId = id, at = now(), type = "AUDIO_${signal.name}"))
+    fun recordAudio(id: String, version: Int, signal: AudioSignal) {
+        val event = when (signal) {
+            AudioSignal.PLAYBACK_STARTED -> TechnicalEvent.AUDIO_STARTED
+            AudioSignal.USING_FALLBACK -> TechnicalEvent.AUDIO_RECOVERY
+            AudioSignal.FOCUS_PAUSED, AudioSignal.FOCUS_LOST, AudioSignal.FOCUS_DELAYED, AudioSignal.CALL_PAUSED -> TechnicalEvent.AUDIO_FOCUS_LOST
+            AudioSignal.FOCUS_GAINED -> TechnicalEvent.AUDIO_FOCUS_REGAINED
+            AudioSignal.ROUTE_CHANGED -> TechnicalEvent.AUDIO_ROUTE_CHANGED
+            else -> TechnicalEvent.AUDIO_ERROR
+        }
+        app.journal.report(event, id, version, signal.name)
+    }
+
+    suspend fun expireRings() = mutex.withLock {
+        val before = runs()
+        val time = now()
+        val expired = before.map { it to WakeMachine.expireRing(it, time) }.filter { (old, new) -> old != new }
+        if (expired.isNotEmpty()) {
+            db.withTransaction { expired.forEach { (old, new) -> put(old, new) } }
+            reconcile(before)
+        }
     }
 
     suspend fun endCurrentRings(ids: Set<String>): Int = mutex.withLock {
@@ -46,28 +82,41 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         reconcile(before)
         active.size
     }
-    private suspend fun reconcile(before: List<AlarmRun>, recoverSound: Boolean = false) {
+    private suspend fun reconcile(before: List<AlarmRun>, restoreSystem: Boolean = false, recoverSound: Boolean = false) {
         val after = runs()
-        before.filter { old -> after.none { it.id == old.id && it.version == old.version } }.forEach(app.scheduler::cancel)
-        after.filter { !it.terminal }.forEach { run ->
+        val oldById = before.associateBy { it.id }
+        val currentById = after.associateBy { it.id }
+        before.filter { old -> currentById[old.id]?.version != old.version }.forEach(app.scheduler::cancel)
+        after.filter { run ->
+            (run.needsEvent && (restoreSystem || oldById[run.id]?.version != run.version)) ||
+                (recoverSound && run.sounding)
+        }.forEach { run ->
             try {
-                if (run.needsEvent) app.scheduler.schedule(run)
-                else if (recoverSound && run.sounding) app.scheduler.schedule(run, now() + 1000)
+                if (run.needsEvent) reconcile(before, restoreSystem = true)
+                else app.scheduler.schedule(run, now() + 1000)
                 dao.diagnostic(run.id, "")
             } catch (e: Exception) {
                 val message = "Не удалось запланировать: ${e.javaClass.simpleName}"
                 dao.diagnostic(run.id, message)
+                app.journal.report(if (!app.scheduler.allowed()) TechnicalEvent.PERMISSION_MISSING else TechnicalEvent.SCHEDULE_ERROR,
+                    run.id, run.version, if (!app.scheduler.allowed()) "exact_alarm" else "registration")
                 AlarmNotifications.failure(app, message)
             }
         }
-        AlarmNotifications.refreshChecks(app, after)
+        AlarmNotifications.refreshChecks(app, after, app.foreground.value)
+        AlarmNotifications.cancelChecks(app, before.filter { it.id !in currentById }.map { it.id })
     }
+    suspend fun refreshPresentation() = mutex.withLock { AlarmNotifications.refreshChecks(app, runs(), app.foreground.value) }
+
     suspend fun snapshot(): List<AlarmRun> = mutex.withLock { runs() }
     suspend fun profile(key: String): PrivateAlarm? = if (app.unlocked)
         app.privateDb.dao().profile(key)?.let { codec.decodeFromString<PrivateAlarm>(it.json) } else null
     suspend fun save(plan: AlarmPlan, profile: PrivateAlarm, testAt: Long? = null) = mutex.withLock {
         plan.validate()
-        if (plan.enabled) check(app.scheduler.allowed()) { "Разрешите точные будильники в настройках Android" }
+        if (plan.enabled && !app.scheduler.allowed()) {
+            app.journal.report(TechnicalEvent.PERMISSION_MISSING, code = "exact_alarm")
+            error("Разрешите точные будильники в настройках Android")
+        }
         require(profile.title.length <= 100 && profile.phrase.length in 1..500 && profile.qr.length <= 4096)
         require(plan.missions.none { it.kind == MissionKind.QR } || profile.qr.isNotEmpty()) { "Сначала зарегистрируйте QR-код" }
         // Immutable private version: editing tomorrow's alarm cannot alter today's active mission.
@@ -110,13 +159,40 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         try { save(plan,PrivateAlarm(title="Через 20 минут"));return plan }
         catch(e:Exception) { mutex.withLock {lastQuickAt=Long.MIN_VALUE};throw e }
     }
-    suspend fun confirmCheck(id:String, answer:String="", expectedVersion:Int?=null) = update(id) { r,t ->
-        if(r.state!=RunState.WAKE_CHECK_ACTIVE) return@update r
-        check(expectedVersion==null || r.version==expectedVersion) {"Эта проверка уже изменилась"}
-        val passed = Missions.math(r.seed+r.checkIndex+r.cycle,1).answer == answer.toIntOrNull()
-        val changed = WakeMachine.confirm(r,t,passed)
-        check(changed!=r) {if(t>=r.deadline) "Время подтверждения истекло" else "Проверьте ответ"}
-        changed
+    // Compatibility with unversioned intents from an older installed build.
+    suspend fun confirmCheck(id: String, answer: String = "", expectedVersion: Int? = null) {
+        val run = dao.run(id)?.model() ?: return
+        if (run.state != RunState.WAKE_CHECK_ACTIVE) return
+        check(expectedVersion == null || run.version == expectedVersion) { "Эта проверка уже изменилась" }
+        when (confirmWake(run.checkKey, answer, expectedVersion)) {
+            CheckConfirmation.EXPIRED -> error("Время подтверждения истекло")
+            CheckConfirmation.WRONG_ANSWER -> error("Проверьте ответ")
+            CheckConfirmation.CHANGED -> error("Эта проверка уже изменилась")
+            else -> Unit
+        }
+    }
+
+    suspend fun confirmWake(key: CheckKey, answer: String = "", expectedVersion: Int? = null): CheckConfirmation = mutex.withLock {
+        val before = runs()
+        val run = before.firstOrNull { it.id == key.runId } ?: dao.run(key.runId)?.model()
+            ?: return@withLock CheckConfirmation.MISSING
+        val time = now()
+        when (checkPage(key, listOf(run), time)) {
+            CheckPage.CONFIRMED -> return@withLock CheckConfirmation.ALREADY_CONFIRMED
+            CheckPage.EXPIRED, CheckPage.RE_RING -> return@withLock CheckConfirmation.EXPIRED
+            CheckPage.ACTIVE -> Unit
+            else -> return@withLock CheckConfirmation.CHANGED
+        }
+        if (expectedVersion != null && run.version != expectedVersion) return@withLock CheckConfirmation.CHANGED
+        val passed = Missions.math(run.seed + run.checkIndex + run.cycle, 1).answer == answer.toIntOrNull()
+        val confirmed = WakeMachine.confirm(run, time, passed)
+        if (confirmed == run) return@withLock CheckConfirmation.WRONG_ANSWER
+        db.withTransaction {
+            put(run, confirmed)
+            app.journal.record(TechnicalEvent.WAKE_CHECK_CONFIRMED, run)
+        }
+        reconcile(before)
+        CheckConfirmation.ACCEPTED
     }
     suspend fun enable(id: String, enabled: Boolean) {
         if (!enabled) {
@@ -264,12 +340,13 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         val before = runs()
         val run = before.firstOrNull { it.id == id && it.version == token } ?: return@withLock
         val time = now()
-        val next = WakeMachine.due(run, token, time)
+        val next = WakeMachine.expireRing(WakeMachine.due(run, token, time), time)
         if (next == run) {
-            if (run.needsEvent) reconcile(before)
+            if (run.needsEvent) app.scheduler.schedule(run)
             return@withLock
         }
         db.withTransaction {
+            app.journal.record(TechnicalEvent.ALARM_DELIVERED, run)
             if (run.state != RunState.SCHEDULED) {
                 put(run, next)
             } else {
@@ -298,12 +375,17 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
     suspend fun update(id: String, operation: (AlarmRun, Long) -> AlarmRun) = mutex.withLock {
         val before = runs(); val run = before.firstOrNull { it.id == id } ?: return@withLock
         val changed = operation(run, now())
-        db.withTransaction { if (changed != run) put(run, changed) }
+        if (changed == run) return@withLock
+        db.withTransaction { put(run, changed) }
         reconcile(before)
     }
-    suspend fun restore(recalculate: Boolean = false) = mutex.withLock {
+    suspend fun restore(recalculate: Boolean = false, recoverSound: Boolean = true) = mutex.withLock {
         val before = runs()
         db.withTransaction {
+            before.forEach { run ->
+                val expired = WakeMachine.expireRing(run, now())
+                if (expired != run) put(run, expired)
+            }
             if (recalculate) {
                 // A manually changed wall clock must not turn a three-minute check into an hour.
                 before.filter { it.needsEvent && (it.state != RunState.SCHEDULED || it.plan.quick) && it.bootCount == bootCount() && it.eventElapsed > 0 }.forEach { run ->
@@ -333,7 +415,8 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                 }
             }
         }
-        reconcile(before, recoverSound = true)
+        reconcile(before, restoreSystem = true, recoverSound = recoverSound)
+        app.journal.report(TechnicalEvent.SCHEDULE_RESTORED)
     }
     suspend fun clearHistory() = mutex.withLock { db.withTransaction { dao.clearHistory(); dao.clearEvents() } }
 }

@@ -8,22 +8,57 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import ru.podyom.app
 import ru.podyom.core.RingingPriority
+import ru.podyom.data.TechnicalEvent
 import ru.podyom.ui.PodyomTheme
+import ru.podyom.wakecheck.CheckRoute
 
-class RingingActivity:ComponentActivity() {
+class RingingActivity : ComponentActivity() {
     private val vm by viewModels<RingingViewModel>()
-    private var runId by mutableStateOf("")
-    private var followRinging by mutableStateOf(false)
-    override fun onCreate(savedInstanceState:Bundle?) {
-        super.onCreate(savedInstanceState); enableEdgeToEdge(); setShowWhenLocked(true);setTurnScreenOn(true)
-        runId=intent.getStringExtra("runId")?:""
-        followRinging = intent.getBooleanExtra("followRinging", false)
+    private var request by mutableStateOf(Intent())
+    private var wakeRoute: CheckRoute? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setShowWhenLocked(true)
+        setTurnScreenOn(true)
+        receive(intent, opened = savedInstanceState == null)
+        wakeRoute?.let { vm.recordRoute(it, TechnicalEvent.WAKE_ACTIVITY_CREATED) }
         setContent {
-            val runs by vm.runs.collectAsStateWithLifecycle()
-            val active = if (followRinging) RingingPriority.next(runs)?.id ?: runId else runId
-            PodyomTheme { key(active) { RingingScreen(active, vm, onClose = { finish() }) } }
+            val loaded by vm.runs.collectAsStateWithLifecycle()
+            val route = CheckRoute.from(request)
+            val id = request.getStringExtra("runId").orEmpty()
+            val active = if (request.getBooleanExtra("followRinging", false))
+                RingingPriority.next(loaded.orEmpty())?.id ?: id else id
+            PodyomTheme {
+                key(route?.key, active) {
+                    RingingScreen(active, vm, onClose = { finish() }, route = route,
+                        openRing = { nextId -> receive(Intent().putExtra("runId", nextId), opened = false) })
+                }
+            }
         }
     }
-    override fun onNewIntent(intent:Intent) {super.onNewIntent(intent);setIntent(intent);runId=intent.getStringExtra("runId")?:"";followRinging=intent.getBooleanExtra("followRinging",false)}
+
+    public override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        receive(intent, opened = true)
+        if (lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+            wakeRoute?.let { vm.recordRoute(it, TechnicalEvent.WAKE_ACTIVITY_RESUMED) }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        wakeRoute?.let { vm.recordRoute(it, TechnicalEvent.WAKE_ACTIVITY_RESUMED) }
+    }
+
+    private fun receive(intent: Intent, opened: Boolean) {
+        setIntent(intent)
+        request = intent
+        wakeRoute = CheckRoute.from(intent)
+        wakeRoute?.takeIf { opened && it.source == "notification" }
+            ?.let { app.journal.report(TechnicalEvent.NOTIFICATION_OPENED, it.key.runId, it.version, it.source) }
+    }
 }

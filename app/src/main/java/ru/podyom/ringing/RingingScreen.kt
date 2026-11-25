@@ -21,11 +21,18 @@ import kotlinx.coroutines.delay
 import ru.podyom.core.*
 import ru.podyom.missions.*
 import ru.podyom.ui.*
+import ru.podyom.wakecheck.CheckRoute
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
-@Composable fun RingingScreen(id:String,vm:RingingViewModel,onClose:()->Unit) {
-    val runs by vm.runs.collectAsStateWithLifecycle(); val run=runs.firstOrNull {it.id==id}
+@Composable fun RingingScreen(
+    id: String, vm: RingingViewModel, onClose: () -> Unit,
+    route: CheckRoute? = null, openRing: (String) -> Unit = {},
+) {
+    val loaded by vm.runs.collectAsStateWithLifecycle()
+    val runs = loaded.orEmpty()
+    val run = runs.firstOrNull { it.id == id }
+    val confirming by vm.confirming.collectAsStateWithLifecycle()
     val message by vm.message.collectAsStateWithLifecycle()
     var now by remember {mutableLongStateOf(System.currentTimeMillis())}
     var emergency by rememberSaveable {mutableStateOf(false)}
@@ -36,13 +43,40 @@ import java.time.format.DateTimeFormatter
     var unlockRevision by remember {mutableIntStateOf(0)}
     var private by remember(id) {mutableStateOf<PrivateAlarm?>(null)}
     LaunchedEffect(run?.plan?.privateKey,unlockRevision) {run?.let {private=vm.profile(it.plan.privateKey)}}
-    LaunchedEffect(Unit) {while(true) {now=System.currentTimeMillis();delay(250)}} // Display only. Deadline is a persisted system alarm.
+    LaunchedEffect(route?.key, run?.deadline) {
+        now = System.currentTimeMillis()
+        val remaining = (run?.deadline ?: 0L) - now
+        if (route != null && remaining > 0) { delay(remaining); now = System.currentTimeMillis() }
+    }
     BackHandler {onClose()} // Leaving the screen never changes the durable state.
     Surface(Modifier.fillMaxSize()) { Column(Modifier.fillMaxSize().systemBarsPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp),verticalArrangement=Arrangement.spacedBy(18.dp)) {
         Text("ПОДЪЁМ",color=MaterialTheme.colorScheme.primary,style=MaterialTheme.typography.labelLarge)
         Text(LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm")),style=MaterialTheme.typography.displayLarge)
+        if (route != null) {
+            when (checkPage(route.key, loaded, now)) {
+                CheckPage.ACTIVE -> if (run != null) {
+                    ru.podyom.wakecheck.WakeCheckPanel(run, { vm.confirm(route.key, it) },
+                        { emergency = true }, busy = confirming == route.key)
+                    if (message.isNotBlank()) Text(message)
+                }
+                CheckPage.LOADING -> Text("Загрузка проверки…")
+                CheckPage.CONFIRMED -> Text("Пробуждение подтверждено", style = MaterialTheme.typography.headlineMedium)
+                CheckPage.EXPIRED -> Text("Время подтверждения истекло")
+                CheckPage.RE_RING -> {
+                    Text("Время проверки истекло. Будильник звонит снова.")
+                    Button(onClick = { openRing(id) }) { Text("Открыть повторный звонок") }
+                }
+                CheckPage.CANCELLED -> Text("Проверка отменена")
+                CheckPage.MISSING -> Text("Проверка не найдена")
+                CheckPage.CHANGED -> Text("Это уведомление больше не относится к текущей проверке")
+            }
+            if (checkPage(route.key, loaded, now) != CheckPage.ACTIVE) {
+                TextButton(onClick = onClose) { Text("Закрыть экран") }
+            }
+            return@Column
+        }
         Text(private?.title?:"Пора встречать утро",style=MaterialTheme.typography.headlineMedium)
-        if(run==null) {Text("Загрузка состояния…"); TextButton(onClick=onClose) {Text("Закрыть экран")};return@Column}
+        if(run==null) {Text(if (loaded == null) "Загрузка состояния…" else "Событие не найдено"); TextButton(onClick=onClose) {Text("Закрыть экран")};return@Column}
         if(private==null) {
             Text("После перезагрузки разблокируйте телефон для доступа к вашей фразе, коду и мелодии.")
             Button(onClick={context.getSystemService(KeyguardManager::class.java).requestDismissKeyguard(context as ComponentActivity,object:KeyguardManager.KeyguardDismissCallback(){ override fun onDismissSucceeded(){unlockRevision++} })}) {Text("Разблокировать")}
@@ -61,10 +95,11 @@ import java.time.format.DateTimeFormatter
             }
             RunState.WAITING_WAKE_CHECK -> {Text("Проверка впереди",style=MaterialTheme.typography.headlineSmall);Text("Вернёмся через ${duration(run.eventAt-now)}. Можно закрыть приложение — проверка сохранена в системном расписании.");OutlinedButton(onClick=onClose){Text("Продолжить утро")}}
             RunState.WAKE_CHECK_ACTIVE -> {
-                ru.podyom.wakecheck.WakeCheckPanel(run,{answer->vm.confirm(id,answer)},{emergency=true})
+                ru.podyom.wakecheck.WakeCheckPanel(run,{answer->vm.confirm(run.checkKey,answer)},{emergency=true}, busy = confirming == run.checkKey)
             }
             RunState.SNOOZED -> {Text("Сигнал отложен на ${duration(run.eventAt-now)}");OutlinedButton(onClick=onClose){Text("Закрыть экран")}}
             RunState.COMPLETED,RunState.CANCELLED -> {Text(if(run.state==RunState.COMPLETED) "Хорошего тебе дня" else "Этот звонок завершён",style=MaterialTheme.typography.headlineLarge);Text("Следующее регулярное срабатывание остаётся в расписании.");Button(onClick=onClose){Text("Готово")}}
+            RunState.MISSED -> { Text("Будильник пропущен"); Button(onClick=onClose) { Text("Закрыть экран") } }
             RunState.SCHEDULED -> Text("Будильник запланирован на ${date(run.eventAt)}")
         }
         if (run.sounding && queue.size > 1) {
@@ -77,7 +112,9 @@ import java.time.format.DateTimeFormatter
         if(run.sounding && run.snoozes<run.plan.snoozeLimit) OutlinedButton(onClick={vm.snooze(id)},modifier=Modifier.fillMaxWidth()) {Text("Отложить · ${run.plan.snoozeSeconds/60} мин (${run.plan.snoozeLimit-run.snoozes} осталось)")}
         if(!run.terminal) TextButton(onClick={emergency=true}) {Text("Не могу выполнить · аварийное завершение")}
     } }
-    ru.podyom.wakecheck.ActiveWakeCheckHost(runs,{rid,answer->vm.confirm(rid,answer)},vm::cancel,excludeId=id)
+    if (route == null && run?.state != RunState.WAKE_CHECK_ACTIVE) {
+        ru.podyom.wakecheck.ActiveWakeCheckHost(runs, vm::confirm, vm::cancel, excludeId = id, confirming = confirming)
+    }
     if (queuedConfirmation.isNotEmpty()) AlertDialog(
         onDismissRequest = { queuedConfirmation = arrayListOf() },
         title = { Text("Завершить выбранные звонки?") },

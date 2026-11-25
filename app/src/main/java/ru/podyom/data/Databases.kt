@@ -25,6 +25,11 @@ fun AlarmRun.row() = RunRow(id, plan.id, state.name, eventAt, codec.encodeToStri
     @Query("SELECT * FROM alarms") fun observeAlarms(): Flow<List<AlarmRow>>
     @Query("SELECT * FROM runs ORDER BY eventAt ASC") fun observeRuns(): Flow<List<RunRow>>
     @Query("SELECT * FROM events ORDER BY at DESC LIMIT 1000") fun observeEvents(): Flow<List<EventRow>>
+    @Query("SELECT * FROM events WHERE type LIKE 'TECH|%' ORDER BY id DESC LIMIT 400") suspend fun technicalEvents(): List<EventRow>
+    @Query("DELETE FROM events WHERE (type LIKE 'TECH|%' OR substr(type, 1, 6) = 'AUDIO_') AND id NOT IN (SELECT id FROM events WHERE type LIKE 'TECH|%' OR substr(type, 1, 6) = 'AUDIO_' ORDER BY id DESC LIMIT 400)")
+    suspend fun trimTechnicalEvents()
+    @Query("SELECT * FROM runs WHERE state NOT IN ('COMPLETED', 'CANCELLED', 'MISSED')") fun observeLiveRuns(): Flow<List<RunRow>>
+    @Query("SELECT * FROM runs WHERE state NOT IN ('COMPLETED', 'CANCELLED', 'MISSED')") suspend fun liveRuns(): List<RunRow>
     @Query("SELECT * FROM alarms") suspend fun alarms(): List<AlarmRow>
     @Query("SELECT * FROM runs") suspend fun runs(): List<RunRow>
     @Query("SELECT * FROM runs WHERE id = :id") suspend fun run(id: String): RunRow?
@@ -34,7 +39,7 @@ fun AlarmRun.row() = RunRow(id, plan.id, state.name, eventAt, codec.encodeToStri
     @Query("DELETE FROM runs WHERE id = :id AND state = 'SCHEDULED'") suspend fun deletePendingRun(id: String)
     @Query("DELETE FROM events WHERE runId = :id AND type = 'SCHEDULED'") suspend fun deleteScheduledEvent(id: String)
     @Query("DELETE FROM alarms WHERE id = :id") suspend fun deleteAlarm(id: String)
-    @Query("DELETE FROM runs WHERE state IN ('COMPLETED', 'CANCELLED')") suspend fun clearHistory()
+    @Query("DELETE FROM runs WHERE state IN ('COMPLETED', 'CANCELLED', 'MISSED')") suspend fun clearHistory()
     @Query("DELETE FROM events") suspend fun clearEvents()
     @Query("UPDATE runs SET diagnostic = :message WHERE id = :id") suspend fun diagnostic(id: String, message: String)
 }

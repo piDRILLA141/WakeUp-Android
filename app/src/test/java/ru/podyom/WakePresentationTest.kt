@@ -91,4 +91,27 @@ class WakePresentationTest {
         assertEquals(NotificationManager.IMPORTANCE_NONE,migrated.importance)
     }
 
+    @Test fun stableKeyIsIdempotentAndCannotConfirmAnotherCheck() = runBlocking {
+        val first = active()
+        val other = first.copy(id = java.util.UUID.randomUUID().toString(), checkIndex = 1)
+        app.runtime.dao().putRun(other.row())
+        assertEquals(CheckConfirmation.ACCEPTED, engine.confirmWake(first.checkKey))
+        assertEquals(CheckConfirmation.ALREADY_CONFIRMED, engine.confirmWake(first.checkKey))
+        assertEquals(RunState.WAKE_CHECK_ACTIVE, app.runtime.dao().run(other.id)!!.model().state)
+        assertEquals(CheckConfirmation.CHANGED, engine.confirmWake(other.checkKey.copy(index = 2)))
+        clock = other.deadline
+        assertEquals(CheckConfirmation.EXPIRED, engine.confirmWake(other.checkKey))
+    }
+
+    @Test fun technicalJournalIsBoundedAndFiltersPrivateFields() = runBlocking {
+        repeat(410) { index ->
+            app.journal.record(TechnicalEvent.SCHEDULE_ERROR, "Личное название", index, "content://личная-мелодия")
+        }
+        val entries = app.journal.recent()
+        assertEquals(400, entries.size)
+        assertEquals(409, entries.first().version)
+        assertEquals(10, entries.last().version)
+        assertTrue(entries.all { it.runId == null && it.code == null })
+    }
+
 }
