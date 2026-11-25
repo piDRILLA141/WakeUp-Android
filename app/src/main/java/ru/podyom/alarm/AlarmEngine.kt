@@ -53,7 +53,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
     fun recordAudio(id: String, version: Int, signal: AudioSignal) {
         val event = when (signal) {
             AudioSignal.PLAYBACK_STARTED -> TechnicalEvent.AUDIO_STARTED
-            AudioSignal.USING_FALLBACK -> TechnicalEvent.AUDIO_RECOVERY
+            AudioSignal.USING_FALLBACK, AudioSignal.RECOVERY_RETRY -> TechnicalEvent.AUDIO_RECOVERY
             AudioSignal.FOCUS_PAUSED, AudioSignal.FOCUS_LOST, AudioSignal.FOCUS_DELAYED, AudioSignal.CALL_PAUSED -> TechnicalEvent.AUDIO_FOCUS_LOST
             AudioSignal.FOCUS_GAINED -> TechnicalEvent.AUDIO_FOCUS_REGAINED
             AudioSignal.ROUTE_CHANGED -> TechnicalEvent.AUDIO_ROUTE_CHANGED
@@ -325,6 +325,8 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
             }
         } catch (e: Exception) {
             staged.forEach { runCatching { app.scheduler.cancel(it) } }
+            val failed = staged.lastOrNull()
+            app.journal.report(TechnicalEvent.SCHEDULE_ERROR, failed?.id, failed?.version, "registration")
             throw IllegalStateException("Не удалось обновить системное расписание. Прежнее расписание сохранено.", e)
         }
         changes.mapNotNull { it.previous }.forEach { app.scheduler.cancel(it) }

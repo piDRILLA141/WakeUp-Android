@@ -263,6 +263,7 @@ class AlarmAudio(
             // The failed player may already have released its own wake lock.
             keepAwakeForPreparation()
             retryAt = SystemClock.elapsedRealtime() + recovery.retryDelayMillis
+            signal(AudioSignal.RECOVERY_RETRY)
             if (recovery.useFallback && recovery.failures == 1) signal(AudioSignal.USING_FALLBACK)
         }
     }
@@ -326,6 +327,7 @@ enum class AudioSignal(val detail: String? = null) {
     SOURCE_UNAVAILABLE,
     PREPARE_TIMEOUT,
     USING_FALLBACK,
+    RECOVERY_RETRY,
     RECOVERY_EXHAUSTED("Не удалось восстановить звук будильника. Проверьте аудиовыход."),
     FOCUS_DELAYED,
     FOCUS_PAUSED,

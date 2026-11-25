@@ -78,15 +78,26 @@ jobs:
           fi
           sha512sum --check "$filename.sha512"
           echo "PODYOM_ROBOLECTRIC_SDK_DIR=$sdk_dir" >> "$GITHUB_ENV"
-      - name: Build and verify
-        id: build
+      - name: Build and lint
+        id: binaries
+        timeout-minutes: 10
         env:
           PODYOM_KEYSTORE_PASSWORD: ${{ secrets.PODYOM_KEYSTORE_PASSWORD }}
           PODYOM_KEY_ALIAS: ${{ secrets.PODYOM_KEY_ALIAS }}
           PODYOM_KEY_PASSWORD: ${{ secrets.PODYOM_KEY_PASSWORD }}
         run: |
           set -o pipefail
-          ./gradlew :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --console=plain 2>&1 | tee "$RUNNER_TEMP/podyom-build.log"
+          ./gradlew :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --console=plain 2>&1 | tee "$RUNNER_TEMP/podyom-build.log"
+      - name: Run Kotlin and Robolectric tests
+        id: tests
+        timeout-minutes: 8
+        env:
+          PODYOM_KEYSTORE_PASSWORD: ${{ secrets.PODYOM_KEYSTORE_PASSWORD }}
+          PODYOM_KEY_ALIAS: ${{ secrets.PODYOM_KEY_ALIAS }}
+          PODYOM_KEY_PASSWORD: ${{ secrets.PODYOM_KEY_PASSWORD }}
+        run: |
+          set -o pipefail
+          ./gradlew :core:test :app:testDebugUnitTest --console=plain 2>&1 | tee -a "$RUNNER_TEMP/podyom-build.log"
       - name: Prepare installable APK
         run: |
           mkdir -p dist
@@ -139,7 +150,7 @@ jobs:
       - name: Prepare verification reports
         if: always()
         env:
-          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          BUILD_OUTCOME: ${{ steps.binaries.outcome == 'success' && steps.tests.outcome || steps.binaries.outcome }}
           EMULATOR_OUTCOME: ${{ steps.instrumentation.outcome }}
         run: |
           python3 scripts/package-check-results.py "$RUNNER_TEMP/podyom/results" --build-outcome "$BUILD_OUTCOME" --build-log "$RUNNER_TEMP/podyom-build.log" --emulator-outcome "$EMULATOR_OUTCOME"
