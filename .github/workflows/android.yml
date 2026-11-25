@@ -140,7 +140,10 @@ jobs:
           set -euo pipefail
           image='system-images;android-36;google_apis;x86_64'
           sdkmanager emulator "$image"
-          printf 'no\n' | avdmanager create avd --name podyom-api36 --package "$image" --force
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/podyom-avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          printf 'no\n' | avdmanager create avd --name podyom-api36 --package "$image" --path "$ANDROID_AVD_HOME/podyom-api36.avd" --force
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -qx podyom-api36
           "$ANDROID_HOME/emulator/emulator" -accel-check
           "$ANDROID_HOME/emulator/emulator" -avd podyom-api36 -no-window -no-audio -no-snapshot \
             -gpu software -feature -Vulkan -no-boot-anim > "$RUNNER_TEMP/podyom-emulator.log" 2>&1 &

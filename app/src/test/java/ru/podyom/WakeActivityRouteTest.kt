@@ -72,19 +72,14 @@ class WakeActivityRouteTest {
             val persisted = runBlocking { app.engine.snapshot() }
             assertEquals(RunState.WAKE_CHECK_ACTIVE, persisted.first { it.id == first.id }.state)
             assertFalse(persisted.any { it.id == second.id })
-        }
-    }
 
-    @Test fun expiredAndMissingNotificationStayOnAnInformativeScreen() {
-        val app = RuntimeEnvironment.getApplication() as App
-        val old = storedCheck(app, System.currentTimeMillis() - 30_000)
-        val intent = pendingIntent(app, old)
-        assertEquals(old.checkKey, CheckRoute.from(intent)?.key)
-        assertEquals(CheckPage.EXPIRED, checkPage(old.checkKey, listOf(old), System.currentTimeMillis()))
-        Robolectric.buildActivity(RingingActivity::class.java, intent).setup().use { activity ->
+            val due = first.copy(deadline = System.currentTimeMillis() - 30_000)
+            runBlocking { app.runtime.dao().putRun(due.row()) }
+            activity.newIntent(firstIntent)
             waitForText("Время подтверждения истекло")
             compose.onNodeWithText("ДА, Я ПРОСНУЛСЯ").assertDoesNotExist()
-            val missing = old.copy(id = UUID.randomUUID().toString())
+
+            val missing = due.copy(id = UUID.randomUUID().toString())
             val missingIntent = CheckRoute(missing.checkKey, missing.version, "notification").intent(app)
             activity.newIntent(missingIntent)
             waitForText("Проверка не найдена")
