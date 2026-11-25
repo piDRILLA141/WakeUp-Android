@@ -9,9 +9,7 @@ pluginManagement {
     repositories {
         google { content { excludeGroup("com.google.devtools.ksp") } }
         if (System.getenv("GITHUB_ACTIONS") == "true") {
-            maven("https://maven-central.storage-download.googleapis.com/maven2/") {
-                content { includeGroup("com.google.devtools.ksp") }
-            }
+            maven("https://maven-central.storage-download.googleapis.com/maven2/")
         }
         mavenCentral()
         gradlePluginPortal()
@@ -22,12 +20,7 @@ dependencyResolutionManagement {
     repositories {
         google { content { excludeGroup("com.google.devtools.ksp") } }
         if (System.getenv("GITHUB_ACTIONS") == "true") {
-            maven("https://maven-central.storage-download.googleapis.com/maven2/") {
-                content {
-                    includeGroup("com.google.devtools.ksp")
-                    includeGroup("org.robolectric")
-                }
-            }
+            maven("https://maven-central.storage-download.googleapis.com/maven2/")
         }
         mavenCentral()
     }
