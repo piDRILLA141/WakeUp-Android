@@ -4,12 +4,12 @@ import android.app.NotificationManager
 import android.content.Intent
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
-import androidx.test.core.app.ActivityScenario
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
@@ -52,14 +52,14 @@ class WakeActivityRouteTest {
         val firstIntent = pendingIntent(app, first)
         assertEquals(first.checkKey, CheckRoute.from(firstIntent)?.key)
         assertEquals(first.deadline, runBlocking { app.engine.snapshot().first { it.id == first.id }.deadline })
-        ActivityScenario.launch<RingingActivity>(firstIntent).use { scenario ->
+        Robolectric.buildActivity(RingingActivity::class.java, firstIntent).setup().use { activity ->
             waitForText("ДА, Я ПРОСНУЛСЯ")
-            scenario.recreate()
+            activity.recreate()
             waitForText("ДА, Я ПРОСНУЛСЯ")
             val secondIntent = pendingIntent(app, second)
-            scenario.onActivity { it.onNewIntent(secondIntent) }
+            activity.newIntent(secondIntent)
             waitForText("Ответ для подтверждения")
-            scenario.recreate()
+            activity.recreate()
             waitForText("Ответ для подтверждения")
             compose.onNodeWithText("Ответ для подтверждения").performTextReplacement(
                 Missions.math(second.seed + second.cycle + second.checkIndex, 1).answer.toString())
@@ -74,12 +74,12 @@ class WakeActivityRouteTest {
     @Test fun expiredAndMissingNotificationStayOnAnInformativeScreen() {
         val app = RuntimeEnvironment.getApplication() as App
         val old = storedCheck(app, System.currentTimeMillis() - 1)
-        ActivityScenario.launch<RingingActivity>(pendingIntent(app, old)).use { scenario ->
+        Robolectric.buildActivity(RingingActivity::class.java, pendingIntent(app, old)).setup().use { activity ->
             waitForText("Время подтверждения истекло")
             compose.onNodeWithText("ДА, Я ПРОСНУЛСЯ").assertDoesNotExist()
             val missing = old.copy(id = UUID.randomUUID().toString())
             val missingIntent = CheckRoute(missing.checkKey, missing.version, "notification").intent(app)
-            scenario.onActivity { it.onNewIntent(missingIntent) }
+            activity.newIntent(missingIntent)
             waitForText("Проверка не найдена")
         }
     }
