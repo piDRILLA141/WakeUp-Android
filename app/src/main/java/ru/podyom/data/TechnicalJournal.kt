@@ -31,17 +31,20 @@ class TechnicalJournal(private val app: App) {
         }
     }
 
-    suspend fun record(event: TechnicalEvent, run: AlarmRun, code: String? = null) =
-        record(event, run.id, run.version, code)
-
     suspend fun record(event: TechnicalEvent, id: String? = null, version: Int? = null, code: String? = null) {
+        app.runtime.withTransaction { insert(event, id, version, code) }
+    }
+
+    // The engine commits this event together with the corresponding state transition.
+    internal suspend fun recordInTransaction(event: TechnicalEvent, run: AlarmRun) =
+        insert(event, run.id, run.version, null)
+
+    private suspend fun insert(event: TechnicalEvent, id: String?, version: Int?, code: String?) {
         val safeId = id?.takeIf { ID.matches(it) }.orEmpty()
         val safeCode = code?.takeIf { it in FIXED_CODES || AudioSignal.entries.any { signal -> signal.name == it } }.orEmpty()
-        app.runtime.withTransaction {
-            dao.event(EventRow(runId = safeId, at = System.currentTimeMillis(),
-                type = "TECH|${event.name}|${version ?: -1}|$safeCode"))
-            dao.trimTechnicalEvents()
-        }
+        dao.event(EventRow(runId = safeId, at = System.currentTimeMillis(),
+            type = "TECH|${event.name}|${version ?: -1}|$safeCode"))
+        dao.trimTechnicalEvents()
     }
 
     suspend fun recent() = dao.technicalEvents().mapNotNull(::decode)

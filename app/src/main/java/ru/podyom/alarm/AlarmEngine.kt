@@ -38,12 +38,12 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                 else -> null
             }
             val journal = app.journal
-            if (event != null) journal.record(event, next)
+            if (event != null) journal.recordInTransaction(event, next)
             if (previous?.state == RunState.MISSION_RUNNING &&
                 next.state in setOf(RunState.WAITING_WAKE_CHECK, RunState.COMPLETED)) {
-                journal.record(TechnicalEvent.MISSION_COMPLETED, next)
+                journal.recordInTransaction(TechnicalEvent.MISSION_COMPLETED, next)
             }
-            if (next.state == RunState.RE_RINGING) journal.record(TechnicalEvent.WAKE_CHECK_EXPIRED, next)
+            if (next.state == RunState.RE_RINGING) journal.recordInTransaction(TechnicalEvent.WAKE_CHECK_EXPIRED, next)
         }
     }
     private fun occurrence(plan: AlarmPlan, at: Long) = AlarmRun(UUID.randomUUID().toString(), plan, at)
@@ -189,7 +189,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         if (confirmed == run) return@withLock CheckConfirmation.WRONG_ANSWER
         db.withTransaction {
             put(run, confirmed)
-            app.journal.record(TechnicalEvent.WAKE_CHECK_CONFIRMED, run)
+            app.journal.recordInTransaction(TechnicalEvent.WAKE_CHECK_CONFIRMED, run)
         }
         reconcile(before)
         CheckConfirmation.ACCEPTED
@@ -357,7 +357,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
             return@withLock
         }
         db.withTransaction {
-            app.journal.record(TechnicalEvent.ALARM_DELIVERED, run)
+            app.journal.recordInTransaction(TechnicalEvent.ALARM_DELIVERED, run)
             if (run.state != RunState.SCHEDULED) {
                 put(run, next)
             } else {

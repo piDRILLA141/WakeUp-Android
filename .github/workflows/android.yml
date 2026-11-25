@@ -40,6 +40,8 @@ jobs:
           packages: platform-tools
           log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.event_name != 'push' || github.ref != 'refs/heads/build/downloadable-debug-apk' }}
       - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
       - name: Restore optional persistent signing key
         env:
@@ -88,16 +90,6 @@ jobs:
         run: |
           set -o pipefail
           ./gradlew :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest --console=plain 2>&1 | tee "$RUNNER_TEMP/podyom-build.log"
-      - name: Run Kotlin and Robolectric tests
-        id: tests
-        timeout-minutes: 8
-        env:
-          PODYOM_KEYSTORE_PASSWORD: ${{ secrets.PODYOM_KEYSTORE_PASSWORD }}
-          PODYOM_KEY_ALIAS: ${{ secrets.PODYOM_KEY_ALIAS }}
-          PODYOM_KEY_PASSWORD: ${{ secrets.PODYOM_KEY_PASSWORD }}
-        run: |
-          set -o pipefail
-          ./gradlew :core:test :app:testDebugUnitTest --console=plain 2>&1 | tee -a "$RUNNER_TEMP/podyom-build.log"
       - name: Prepare installable APK
         run: |
           mkdir -p dist
@@ -116,6 +108,16 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 30
+      - name: Run Kotlin and Robolectric tests
+        id: tests
+        timeout-minutes: 8
+        env:
+          PODYOM_KEYSTORE_PASSWORD: ${{ secrets.PODYOM_KEYSTORE_PASSWORD }}
+          PODYOM_KEY_ALIAS: ${{ secrets.PODYOM_KEY_ALIAS }}
+          PODYOM_KEY_PASSWORD: ${{ secrets.PODYOM_KEY_PASSWORD }}
+        run: |
+          set -o pipefail
+          ./gradlew :core:test :app:testDebugUnitTest --console=plain 2>&1 | tee -a "$RUNNER_TEMP/podyom-build.log"
       - name: Check emulator availability
         id: emulator
         run: |
