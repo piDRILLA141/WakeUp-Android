@@ -2,6 +2,8 @@ package ru.podyom
 
 import android.app.Application
 import android.app.Activity
+import android.app.KeyguardManager
+import android.os.PowerManager
 import android.os.Bundle
 import kotlinx.coroutines.flow.MutableStateFlow
 import android.content.Context
@@ -20,6 +22,10 @@ class App : Application() {
     val engine by lazy { AlarmEngine(this) }
     val unlocked get() = getSystemService(UserManager::class.java).isUserUnlocked
     val foreground=MutableStateFlow(false)
+    fun hasVisibleCheckHost(): Boolean = ringingForeground.value ||
+        (foreground.value && getSystemService(PowerManager::class.java).isInteractive &&
+            !getSystemService(KeyguardManager::class.java).isKeyguardLocked)
+
     private val resumed=mutableSetOf<Activity>()
     private fun publishForeground() {
         ringingForeground.value = resumed.any { it is ru.podyom.ringing.RingingActivity }

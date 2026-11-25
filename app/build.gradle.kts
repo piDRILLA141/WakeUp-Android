@@ -32,6 +32,7 @@ android {
     testOptions {
         unitTests.isIncludeAndroidResources = true
         unitTests.all {
+            it.testLogging.exceptionFormat = org.gradle.api.tasks.testing.TestExceptionFormat.FULL
             // Robolectric Android 16 accesses FileDescriptor through this JDK 21 internal bridge.
             it.jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
             it.systemProperty("user.home", rootProject.layout.projectDirectory.dir(".gradle/test-home").asFile.apply { mkdirs() }.absolutePath)

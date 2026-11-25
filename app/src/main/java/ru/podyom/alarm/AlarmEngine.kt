@@ -92,7 +92,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                 (recoverSound && run.sounding)
         }.forEach { run ->
             try {
-                if (run.needsEvent) reconcile(before, restoreSystem = true)
+                if (run.needsEvent) app.scheduler.schedule(run)
                 else app.scheduler.schedule(run, now() + 1000)
                 dao.diagnostic(run.id, "")
             } catch (e: Exception) {
@@ -103,10 +103,10 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                 AlarmNotifications.failure(app, message)
             }
         }
-        AlarmNotifications.refreshChecks(app, after, app.foreground.value)
+        AlarmNotifications.refreshChecks(app, after, app.hasVisibleCheckHost())
         AlarmNotifications.cancelChecks(app, before.filter { it.id !in currentById }.map { it.id })
     }
-    suspend fun refreshPresentation() = mutex.withLock { AlarmNotifications.refreshChecks(app, runs(), app.foreground.value) }
+    suspend fun refreshPresentation() = mutex.withLock { AlarmNotifications.refreshChecks(app, runs(), app.hasVisibleCheckHost()) }
 
     suspend fun snapshot(): List<AlarmRun> = mutex.withLock { runs() }
     suspend fun profile(key: String): PrivateAlarm? = if (app.unlocked)

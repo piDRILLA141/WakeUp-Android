@@ -42,7 +42,9 @@ import java.time.format.DateTimeFormatter
     val context=LocalContext.current
     var unlockRevision by remember {mutableIntStateOf(0)}
     var private by remember(id) {mutableStateOf<PrivateAlarm?>(null)}
-    LaunchedEffect(run?.plan?.privateKey,unlockRevision) {run?.let {private=vm.profile(it.plan.privateKey)}}
+    LaunchedEffect(route?.key, run?.plan?.privateKey, unlockRevision) {
+        if (route == null) private = run?.let { vm.profile(it.plan.privateKey) }
+    }
     LaunchedEffect(route?.key, run?.deadline) {
         now = System.currentTimeMillis()
         val remaining = (run?.deadline ?: 0L) - now

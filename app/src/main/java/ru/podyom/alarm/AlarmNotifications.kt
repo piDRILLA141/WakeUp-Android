@@ -59,7 +59,10 @@ object AlarmNotifications {
         return PendingIntent.getActivity(context, 0, route.intent(context),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             if (Build.VERSION.SDK_INT >= 35 && fullScreen) ActivityOptions.makeBasic()
-                .setPendingIntentCreatorBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED).toBundle()
+                .setPendingIntentCreatorBackgroundActivityStartMode(
+                    if (Build.VERSION.SDK_INT >= 36) ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS
+                    else ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED,
+                ).toBundle()
             else null)
     }
 
