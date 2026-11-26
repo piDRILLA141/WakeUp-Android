@@ -380,6 +380,12 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                 val day = run.scheduledAt.asLocalDate(zoneId()).toEpochDay()
                 if (plan?.enabled == true && day !in plan.skipEpochDays &&
                     (plan.days.isEmpty() || plan.lastFiredEpochDay != day)) {
+                    if (next.sounding) {
+                        before.forEach { previous ->
+                            val retired = WakeMachine.supersede(previous, next, time)
+                            if (retired != previous) put(previous, retired, "SESSION_SUPERSEDED")
+                        }
+                    }
                     put(run, next)
                     val updated = if (plan.days.isEmpty()) plan.copy(enabled = false)
                         else plan.copy(lastFiredEpochDay = day)
@@ -408,7 +414,15 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
     suspend fun restore(recalculate: Boolean = false, recoverSound: Boolean = true) = mutex.withLock {
         val before = runs()
         db.withTransaction {
+            val fired = before.asSequence().filter { it.firedAt > 0 }
+                .groupBy { it.plan.id }.mapValues { (_, sessions) -> sessions.maxBy { it.scheduledAt } }
             before.forEach { run ->
+                val newest = fired[run.plan.id]
+                val retired = if (newest == null) run else WakeMachine.supersede(run, newest, now())
+                if (retired != run) {
+                    put(run, retired, "SESSION_SUPERSEDED")
+                    return@forEach
+                }
                 if (run.sounding) {
                     val expired = expireRing(run, now())
                     if (expired != run || run.ringDeadlineElapsed == null || run.bootCount != bootCount()) {
@@ -418,7 +432,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
             }
             if (recalculate) {
                 // A manually changed wall clock must not turn a three-minute check into an hour.
-                before.filter { it.needsEvent && (it.state != RunState.SCHEDULED || it.plan.quick) && it.bootCount == bootCount() && it.eventElapsed > 0 }.forEach { run ->
+                runs().filter { it.needsEvent && (it.state != RunState.SCHEDULED || it.plan.quick) && it.bootCount == bootCount() && it.eventElapsed > 0 }.forEach { run ->
                     val rebased = now() + (run.eventElapsed - elapsed()).coerceAtLeast(0)
                     val delta = rebased - run.eventAt
                     val updated = run.copy(plan=if(run.plan.quick) run.plan.copy(oneShotAt=rebased) else run.plan, eventAt = rebased, deadline = if(run.deadline > 0) run.deadline + delta else 0,

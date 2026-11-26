@@ -17,6 +17,7 @@ fun checkPage(key: CheckKey, runs: List<AlarmRun>?, now: Long): CheckPage {
     if (runs == null) return CheckPage.LOADING
     val run = runs.firstOrNull { it.id == key.runId } ?: return CheckPage.MISSING
     if (run.state == RunState.CANCELLED) return CheckPage.CANCELLED
+    if (run.state == RunState.MISSED) return CheckPage.EXPIRED
     if (run.cycle > key.cycle) return if (run.sounding) CheckPage.RE_RING else CheckPage.EXPIRED
     if (run.cycle != key.cycle) return CheckPage.CHANGED
     if (run.checkIndex > key.index || (run.checkIndex == key.index && run.state == RunState.COMPLETED))
