@@ -37,7 +37,7 @@ import java.time.format.DateTimeFormatter
     var now by remember {mutableLongStateOf(System.currentTimeMillis())}
     var emergency by rememberSaveable(run?.state, run?.checkIndex, run?.cycle) {mutableStateOf(false)}
     var phrase by rememberSaveable {mutableStateOf("")}
-    var queuedConfirmation by rememberSaveable {mutableStateOf(arrayListOf<String>())}
+    var queuedConfirmation by rememberSaveable {mutableStateOf<List<String>>(emptyList())}
     val queue = RingingPriority.ordered(runs)
     val context=LocalContext.current
     var unlockRevision by remember {mutableIntStateOf(0)}
@@ -115,7 +115,7 @@ import java.time.format.DateTimeFormatter
         }
         if (run.sounding && queue.size > 1) {
             Text("Незавершённых звонков: ${queue.size}", style = MaterialTheme.typography.bodySmall)
-            OutlinedButton(onClick = { queuedConfirmation = ArrayList(queue.map { it.id }) }) {
+            OutlinedButton(onClick = { queuedConfirmation = queue.map { it.id } }) {
                 Text("Завершить текущие звонки")
             }
         }
@@ -127,14 +127,14 @@ import java.time.format.DateTimeFormatter
         ru.podyom.wakecheck.ActiveWakeCheckHost(runs, vm::confirm, vm::cancelCheck, excludeId = id, confirming = confirming)
     }
     if (queuedConfirmation.isNotEmpty()) AlertDialog(
-        onDismissRequest = { queuedConfirmation = arrayListOf() },
+        onDismissRequest = { queuedConfirmation = emptyList() },
         title = { Text("Завершить выбранные звонки?") },
         text = { Text("Незавершённые задания останутся в истории. Будущие сигналы и проверки сохранятся.") },
         confirmButton = { TextButton(onClick = {
             vm.endCurrentRings(queuedConfirmation.toSet())
-            queuedConfirmation = arrayListOf()
+            queuedConfirmation = emptyList()
         }) { Text("Завершить звонки") } },
-        dismissButton = { TextButton(onClick = { queuedConfirmation = arrayListOf() }) { Text("Отмена") } },
+        dismissButton = { TextButton(onClick = { queuedConfirmation = emptyList() }) { Text("Отмена") } },
     )
     if(emergency) AlertDialog(onDismissRequest={emergency=false},title={Text("Завершить текущий звонок и проверки?")},text={Column {Text("Если вам плохо или задание недоступно, можно остановиться. Введите «ЗАВЕРШИТЬ». Случай сохранится в истории без штрафов.");OutlinedTextField(phrase,{phrase=it},label={Text("Подтверждение")})}},confirmButton={TextButton(onClick={if (route != null) vm.cancelCheck(route.key) else if (run?.state == RunState.WAKE_CHECK_ACTIVE) vm.cancelCheck(run.checkKey) else vm.cancel(id);emergency=false},enabled=phrase.trim()=="ЗАВЕРШИТЬ"){Text("Завершить")}},dismissButton={TextButton(onClick={emergency=false}){Text("Вернуться")}})
 }

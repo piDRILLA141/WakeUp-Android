@@ -31,7 +31,9 @@ class SettingsStore(private val context: Context) {
     suspend fun light(value: Boolean) { context.preferences.edit { it[light] = value } }
     suspend fun clock24(value: Boolean) { context.preferences.edit { it[clock24] = value } }
     suspend fun enhanced(value:Boolean) {
-        context.createDeviceProtectedStorageContext().getSharedPreferences("presentation",Context.MODE_PRIVATE).edit().putBoolean("enhancedCheck",value).commit()
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            check(runtimePrefs.edit().putBoolean("enhancedCheck", value).commit()) { "Не удалось сохранить настройку" }
+        }
         context.preferences.edit {it[enhanced]=value}
     }
     suspend fun seen() { context.preferences.edit { it[seen] = true } }

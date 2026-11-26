@@ -40,7 +40,7 @@ import java.util.UUID
     var moveTo by rememberSaveable { mutableStateOf<String?>(null) }
     var addingMembers by rememberSaveable { mutableStateOf<String?>(null) }
     var skipGroup by rememberSaveable { mutableStateOf<String?>(null) }
-    var expandedGroups by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var expandedGroups by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     val alarms by vm.alarms.collectAsStateWithLifecycle(); val runs by vm.runs.collectAsStateWithLifecycle()
     val rows by vm.rows.collectAsStateWithLifecycle(); val profiles by vm.profiles.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle(); val nights by vm.sleep.collectAsStateWithLifecycle()
@@ -50,8 +50,8 @@ import java.util.UUID
     var readiness by rememberSaveable { mutableStateOf(false) }
     val busy by vm.scheduleBusy.collectAsStateWithLifecycle()
     val audioEvents by vm.audioEvents.collectAsStateWithLifecycle()
-    var selectedIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
-    var scheduleIds by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var selectedIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
+    var scheduleIds by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     var scheduleOption by rememberSaveable { mutableStateOf("") }
     val completed by vm.scheduleCompleted.collectAsStateWithLifecycle()
     var acknowledged by rememberSaveable { mutableIntStateOf(completed) }
@@ -59,22 +59,22 @@ import java.util.UUID
         if (acknowledged != completed) {
             acknowledged = completed
             scheduleOption = ""
-            scheduleIds = arrayListOf()
+            scheduleIds = emptyList()
             skipGroup = null
-            selectedIds = arrayListOf()
+            selectedIds = emptyList()
         }
     }
     val selecting = selectedIds.isNotEmpty()
     val ringing = RingingPriority.ordered(runs)
     fun select(id: String) {
-        if (!busy) selectedIds = ArrayList(if (id in selectedIds) selectedIds - id else selectedIds + id)
+        if (!busy) selectedIds = if (id in selectedIds) selectedIds - id else selectedIds + id
     }
     fun openSchedule(ids: Collection<String>, option: String, groupId: String? = null) {
         skipGroup = groupId
-        scheduleIds = ArrayList(ids)
+        scheduleIds = ids.toList()
         scheduleOption = option
     }
-    BackHandler(selecting && !busy) { selectedIds = arrayListOf() }
+    BackHandler(selecting && !busy) { selectedIds = emptyList() }
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
     val calendarNow = remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -101,12 +101,12 @@ import java.util.UUID
         if (selecting && tab == 0) TopAppBar(
             title = { Text("Выбрано: ${selectedIds.size}") },
             actions = {
-                TextButton(onClick = { selectedIds = ArrayList(alarms.map { it.id }) }, enabled = !busy) { Text("Выбрать все") }
-                TextButton(onClick = { selectedIds = arrayListOf() }, enabled = !busy) { Text("Отмена") }
+                TextButton(onClick = { selectedIds = alarms.map { it.id } }, enabled = !busy) { Text("Выбрать все") }
+                TextButton(onClick = { selectedIds = emptyList() }, enabled = !busy) { Text("Отмена") }
             },
         )
     }, bottomBar = {
-        NavigationBar { tabs.forEachIndexed { i, title -> NavigationBarItem(selected = tab == i, onClick = { if (!busy) { tab = i; if (i != 0) selectedIds = arrayListOf() } }, icon = { Icon(icons[i], title) }, label = { Text(title, fontSize = 11.sp) }) } }
+        NavigationBar { tabs.forEachIndexed { i, title -> NavigationBarItem(selected = tab == i, onClick = { if (!busy) { tab = i; if (i != 0) selectedIds = emptyList() } }, icon = { Icon(icons[i], title) }, label = { Text(title, fontSize = 11.sp) }) } }
     }, floatingActionButton = { if (tab == 0 && !readiness && !selecting) FloatingActionButton(onClick = { editor = "new" }) { Icon(Icons.Outlined.Add, "Создать будильник") } }) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding).imePadding(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (readiness) {
@@ -200,7 +200,7 @@ import java.util.UUID
                         item(key = "group-${group.id}") {
                             GroupHeader(group, profiles[group.id]?.title ?: "Группа", plans, opened || selecting,
                                 busy || selecting,
-                                onExpand = { expandedGroups = ArrayList(if (opened) expandedGroups - group.id else expandedGroups + group.id) },
+                                onExpand = { expandedGroups = if (opened) expandedGroups - group.id else expandedGroups + group.id },
                                 enabled = { vm.groupEnabled(group.id, it) },
                                 manage = { groupDialog = group.id },
                                 createAlarm = { editor = "new:${group.id}" },
@@ -281,7 +281,7 @@ import java.util.UUID
             oneShot -> "Пропуск одноразового будильника отменит его единственное срабатывание. Пропуск можно отменить до этого времени."
             else -> "Завтрашние сигналы будут пропущены. Срабатывания на другие даты сохранятся."
         }
-        fun closeSchedule() { scheduleOption = ""; scheduleIds = arrayListOf(); skipGroup = null }
+        fun closeSchedule() { scheduleOption = ""; scheduleIds = emptyList(); skipGroup = null }
         AlertDialog(
             onDismissRequest = { if (!busy) closeSchedule() },
             title = { Text(if (scheduleOption == "choose") "Что сделать с будильником?" else "Выбранные будильники: ${scheduleIds.size}") },
@@ -309,7 +309,7 @@ import java.util.UUID
             onSave = { name, cancelBackups ->
                 if (group == null) vm.createGroup(name, selectedIds.toSet()) {
                     groupDialog = null
-                    selectedIds = arrayListOf()
+                    selectedIds = emptyList()
                 } else vm.editGroup(id, name, cancelBackups) { groupDialog = null }
             },
             onRemove = { alarmId -> vm.moveToGroup(setOf(alarmId), null) {} },
@@ -324,7 +324,7 @@ import java.util.UUID
     moveTo?.let { itemId ->
         val ids = if (itemId.isEmpty()) selectedIds.toSet() else setOf(itemId)
         MoveGroupDialog(groups, profiles, busy, onClose = { moveTo = null },
-            onApply = { groupId -> vm.moveToGroup(ids, groupId) { moveTo = null; selectedIds = arrayListOf() } })
+            onApply = { groupId -> vm.moveToGroup(ids, groupId) { moveTo = null; selectedIds = emptyList() } })
     }
     editor?.let { key ->
         val original = alarms.find { it.id == key }

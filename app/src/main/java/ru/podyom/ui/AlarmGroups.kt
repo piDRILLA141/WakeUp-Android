@@ -97,14 +97,14 @@ fun AddGroupAlarmsDialog(
     plans: List<AlarmPlan>, profiles: Map<String, PrivateAlarm>, busy: Boolean, onClose: () -> Unit,
     onApply: (Set<String>) -> Unit,
 ) {
-    var chosen by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var chosen by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     AlertDialog(onDismissRequest = onClose, title = { Text("Добавить будильники") }, text = {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             if (plans.isEmpty()) Text("Нет доступных будильников")
             plans.forEach { plan ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(plan.id in chosen, { selected ->
-                        chosen = ArrayList(if (selected) chosen + plan.id else chosen - plan.id)
+                        chosen = if (selected) chosen + plan.id else chosen - plan.id
                     }, enabled = !busy)
                     Text("%02d:%02d · %s".format(plan.hour, plan.minute, profiles[plan.privateKey]?.title ?: "Будильник"))
                 }
