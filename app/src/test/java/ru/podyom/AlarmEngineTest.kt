@@ -58,52 +58,6 @@ class AlarmEngineTest {
         assertEquals(RunState.RE_RINGING,runs().first {it.id==r.id}.state)
         assertEquals(1,runs().count {it.state==RunState.SCHEDULED})
     }
-    @Test fun newOccurrenceReplacesOldWakeCheckWithoutAffectingAnotherAlarm() = runBlocking {
-        val originalPlan = plan().copy(days = (1..7).toSet())
-        val firstAt = clock + 1_000
-        engine.save(originalPlan, PrivateAlarm(), firstAt)
-        val first = runs().single()
-        clock = firstAt
-        engine.event(first.id, first.version)
-        engine.update(first.id, WakeMachine::startMission)
-        engine.update(first.id) { run, now -> WakeMachine.progress(run, run.version, now) }
-        val old = runs().first { it.id == first.id }
-        assertEquals(RunState.WAITING_WAKE_CHECK, old.state)
-
-        val other = old.copy(id = java.util.UUID.randomUUID().toString(), plan = plan("other"))
-        app.runtime.dao().putRun(other.row())
-        app.scheduler.schedule(other)
-        val next = runs().single { it.state == RunState.SCHEDULED }
-        clock = next.eventAt
-        engine.event(next.id, next.version)
-        engine.event(old.id, old.version)
-        engine.event(next.id, next.version)
-
-        assertEquals(RunState.MISSED, runs().first { it.id == old.id }.state)
-        assertEquals(CheckConfirmation.EXPIRED, engine.confirmWake(old.checkKey))
-        assertEquals(RunState.WAITING_WAKE_CHECK, runs().first { it.id == other.id }.state)
-        assertEquals(RunState.RINGING, runs().first { it.id == next.id }.state)
-        assertEquals(1, runs().count { it.state == RunState.SCHEDULED })
-        val registered = Shadows.shadowOf(app.getSystemService(AlarmManager::class.java)).scheduledAlarms
-        assertFalse(registered.any { Shadows.shadowOf(it.operation).savedIntent.getStringExtra("runId") == old.id })
-    }
-    @Test fun restoreDoesNotRescheduleAnOlderSessionOfTheSameAlarm() = runBlocking {
-        val alarm = plan().copy(days = (1..7).toSet())
-        val older = AlarmRun("older", alarm, clock - 600_000, state = RunState.WAKE_CHECK_ACTIVE,
-            eventAt = clock + 100_000, deadline = clock + 100_000, firedAt = clock - 600_000)
-        val newer = AlarmRun("newer", alarm, clock - 1_000, state = RunState.MISSION_RUNNING,
-            firedAt = clock - 1_000)
-        app.runtime.dao().putRun(older.row())
-        app.runtime.dao().putRun(newer.row())
-        app.scheduler.schedule(older)
-
-        engine.restore(recalculate = true, recoverSound = false)
-
-        assertEquals(RunState.MISSED, runs().first { it.id == older.id }.state)
-        assertEquals(RunState.MISSION_RUNNING, runs().first { it.id == newer.id }.state)
-        assertNull(app.scheduler.nextSystemAlarm())
-    }
-
     @Test fun persistedCheckRestoredByFreshCoordinator() = runBlocking {
         engine.save(plan(),PrivateAlarm(),clock+1000);val r=runs().single();clock+=1000;engine.event(r.id,0)
         engine.update(r.id,WakeMachine::startMission);engine.update(r.id) {a,t->WakeMachine.progress(a,a.version,t)}
@@ -119,7 +73,7 @@ class AlarmEngineTest {
         assertNull(app.getSystemService(AlarmManager::class.java).nextAlarmClock)
     }
     @Test fun parallelAlarmsRemainIndependent() = runBlocking {
-        engine.save(plan("a"),PrivateAlarm(),clock+1000);engine.save(plan("b"),PrivateAlarm(),clock+1000)
+        engine.save(plan("a").copy(independent = true),PrivateAlarm(),clock+1000);engine.save(plan("b").copy(independent = true),PrivateAlarm(),clock+1000)
         val initial=runs();clock+=1000;initial.forEach {engine.event(it.id,it.version)}
         assertEquals(2,runs().count {it.sounding})
         engine.update(initial.first().id) {a,t->WakeMachine.cancel(a,t,true)}
@@ -342,10 +296,45 @@ class AlarmEngineTest {
         assertEquals(1, runs().count { it.state == RunState.SCHEDULED })
     }
 
+    @Test fun defaultSessionRetiresOldMissionsAndOnlyLatestCanScheduleCheck() = runBlocking {
+        val day = monday(5)
+        val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })
+        repeat(3) { i -> coordinator.save(daily("wake$i", i * 10).copy(missions = listOf(MissionSpec(count = 1))), PrivateAlarm()) }
+        val scheduled = runs().sortedBy { it.scheduledAt }
+        scheduled.forEach { run ->
+            clock = run.eventAt
+            coordinator.event(run.id, run.version)
+            coordinator.update(run.id, WakeMachine::startMission)
+        }
+
+        val current = scheduled.last()
+        coordinator.event(scheduled.first().id, scheduled.first().version)
+        scheduled.dropLast(1).forEach { old ->
+            coordinator.update(old.id) { run, now -> WakeMachine.progress(run, run.version, now) }
+            assertEquals(RunState.MISSED, runs().first { it.id == old.id }.state)
+        }
+        coordinator.update(current.id) { run, now -> WakeMachine.progress(run, run.version, now) }
+        assertEquals(listOf(current.id), runs().filter { it.state == RunState.WAITING_WAKE_CHECK }.map { it.id })
+        assertEquals(3, runs().count { it.state == RunState.SCHEDULED })
+    }
+
+    @Test fun lateEarlierSignalDoesNotReplaceTheNewerMission() = runBlocking {
+        val day = monday(5)
+        val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })
+        coordinator.save(daily("early"), PrivateAlarm())
+        coordinator.save(daily("later", 10), PrivateAlarm())
+        val (early, later) = runs().sortedBy { it.scheduledAt }
+        clock = instant(day, 6, 10)
+        coordinator.event(later.id, later.version)
+        coordinator.event(early.id, early.version)
+        assertEquals(listOf(later.id), runs().filter { it.sounding }.map { it.id })
+        assertEquals(RunState.MISSED, runs().first { it.id == early.id }.state)
+    }
+
     @Test fun laterRingsPreemptAndEndingQueueLeavesFutureAlarmsAndWakeChecks() = runBlocking {
         val day = monday(5)
         val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })
-        for (i in 0..3) coordinator.save(daily("a$i", i * 10), PrivateAlarm())
+        for (i in 0..3) coordinator.save(daily("a$i", i * 10).copy(independent = true), PrivateAlarm())
         for (i in 0..3) {
             val next = runs().single { it.plan.id == "a$i" && it.state == RunState.SCHEDULED }
             clock = instant(day, 6, i * 10)

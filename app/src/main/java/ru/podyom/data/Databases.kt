@@ -32,6 +32,8 @@ fun AlarmRun.row() = RunRow(id, plan.id, state.name, eventAt, codec.encodeToStri
     @Query("SELECT * FROM runs WHERE state NOT IN ('COMPLETED', 'CANCELLED', 'MISSED')") suspend fun liveRuns(): List<RunRow>
     @Query("SELECT * FROM alarms") suspend fun alarms(): List<AlarmRow>
     @Query("SELECT * FROM runs") suspend fun runs(): List<RunRow>
+    @Query("SELECT * FROM runs WHERE state = 'COMPLETED' AND eventAt BETWEEN :from AND :through")
+    suspend fun completedNear(from: Long, through: Long): List<RunRow>
     @Query("SELECT * FROM runs WHERE id = :id") suspend fun run(id: String): RunRow?
     @Upsert suspend fun putAlarm(row: AlarmRow)
     @Upsert suspend fun putRun(row: RunRow)

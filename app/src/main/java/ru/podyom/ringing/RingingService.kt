@@ -138,7 +138,7 @@ class RingingService : Service() {
             return
         }
 
-        // Release the old player before resolving the new profile. Its durable run remains in the queue.
+        // Release the old player before resolving the new profile. The engine keeps only independent runs and runs protected from replacement.
         audio.stop()
         AlarmNotifications.clearAudioFailure(this)
         activeId = selected.id

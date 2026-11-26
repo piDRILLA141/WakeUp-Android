@@ -23,10 +23,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val rows = app.runtime.dao().observeRuns().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val runs = rows.map { list -> list.map { it.model() } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val profiles = app.privateDb.dao().profiles().map { rows -> rows.associate { it.id to codec.decodeFromString<PrivateAlarm>(it.json) } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
-    val settings = app.settings.flow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppSettings(readySeen = true))
+    val settings = app.settings.flow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppSettings(readySeen = true, wakeSessionsSeen = true))
     val sleep = app.privateDb.dao().sleep().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     fun action(block: suspend () -> Unit) { viewModelScope.launch { try { block() } catch (e: Exception) { if(e is CancellationException) throw e; messages.emit(e.message ?: "Не удалось выполнить действие") } } }
+    fun deduplicate(value: Boolean) = action { app.settings.deduplicate(value) }
+    fun markWakeSessionsSeen() = action { app.settings.markWakeSessionsSeen() }
     fun restoreOnce() {
         if (app.foregroundScheduleRestored.compareAndSet(false, true)) {
             action {

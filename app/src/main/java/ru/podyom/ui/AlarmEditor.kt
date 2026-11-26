@@ -81,6 +81,9 @@ import ru.podyom.missions.CodeScanner
                     } catch (_: Exception) { player?.release(); player=null; error="Мелодия недоступна. При звонке будет использован «Рассвет»" }
                 }) { Text(if(player == null) "Прослушать" else "Остановить") } } }
                 item { Text("Уровень сигнала: ${(p.volume*100).toInt()}% от системной громкости"); Slider(p.volume, { change(p.copy(volume = it)) }, valueRange = .05f..1f); NumberSetting("Плавное усиление, секунд", p.rampSeconds, 0..120) { change(p.copy(rampSeconds=it)) }; ToggleRow("Вибрация", p.vibrate) { change(p.copy(vibrate=it)) }; ToggleRow("Приглушать во время задания", p.duckDuringMission) { change(p.copy(duckDuringMission=it)) } }
+                if (!p.quick) item {
+                    ToggleRow("Независимый будильник", p.independent) { change(p.copy(independent = it)) }
+                }
                 if(!p.quick) item { HorizontalDivider(); Text("Задания по порядку", style = MaterialTheme.typography.titleLarge); Text("От 1 до 5 заданий. Для недоступной камеры или датчика есть явная замена математикой.", style = MaterialTheme.typography.bodySmall) }
                 p.missions.forEachIndexed { index, m -> item(key="mission-$index") {
                     OutlinedCard { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

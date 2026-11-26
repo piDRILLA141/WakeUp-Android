@@ -42,6 +42,8 @@ import kotlinx.serialization.Serializable
     val oneShotAt: Long? = null,
     val skipEpochDays: Set<Long> = emptySet(),
     val lastFiredEpochDay: Long? = null,
+    val independent: Boolean = false,
+    val groupId: String? = null,
 ) {
     fun validate() {
         require(id.isNotBlank() && privateKey.isNotBlank())
@@ -90,6 +92,7 @@ import kotlinx.serialization.Serializable
     val bootCount: Int = -1,
     val ringingSince: Long? = null,
     val ringDeadlineElapsed: Long? = null,
+    val disposition: String? = null,
 ) {
     val terminal get() = state == RunState.COMPLETED || state == RunState.CANCELLED || state == RunState.MISSED
     val sounding get() = state in setOf(RunState.RINGING, RunState.MISSION_RUNNING, RunState.RE_RINGING)

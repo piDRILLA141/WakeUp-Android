@@ -40,7 +40,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                 RunState.RE_RINGING -> TechnicalEvent.RE_RING_STARTED
                 RunState.WAITING_WAKE_CHECK -> TechnicalEvent.WAKE_CHECK_SCHEDULED
                 RunState.WAKE_CHECK_ACTIVE -> TechnicalEvent.WAKE_CHECK_STARTED
-                RunState.MISSED -> TechnicalEvent.ALARM_MISSED
+                RunState.MISSED -> if (reason == "SESSION_SUPERSEDED") TechnicalEvent.ALARM_SUPERSEDED else TechnicalEvent.ALARM_MISSED
                 else -> null
             }
             val journal = app.journal
@@ -52,6 +52,9 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
             if (next.state == RunState.RE_RINGING) journal.recordInTransaction(TechnicalEvent.WAKE_CHECK_EXPIRED, next)
         }
     }
+    private fun replaces(older: AlarmRun, newer: AlarmRun, ungrouped: Boolean) =
+        WakeSessions.replaces(older, newer, zoneId(), ungrouped)
+
     private fun occurrence(plan: AlarmPlan, at: Long) = AlarmRun(UUID.randomUUID().toString(), plan, at)
 
     private suspend fun create(plan: AlarmPlan, at: Long) = put(null, occurrence(plan, at))
@@ -380,13 +383,22 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                 val day = run.scheduledAt.asLocalDate(zoneId()).toEpochDay()
                 if (plan?.enabled == true && day !in plan.skipEpochDays &&
                     (plan.days.isEmpty() || plan.lastFiredEpochDay != day)) {
-                    if (next.sounding) {
-                        before.forEach { previous ->
-                            val retired = WakeMachine.supersede(previous, next, time)
-                            if (retired != previous) put(previous, retired, "SESSION_SUPERSEDED")
-                        }
+                    val ungrouped = app.settings.deduplicateEnabled()
+                    val recent = if (next.sounding) dao.completedNear(run.scheduledAt,
+                        time + 86_400_000L).map { it.model() } else emptyList()
+                    val replaced = next.sounding && (before + recent).any { existing ->
+                        existing.firedAt > 0 && !existing.emergency && replaces(run, existing, ungrouped)
                     }
-                    put(run, next)
+                    if (replaced) {
+                        put(run, WakeMachine.supersede(run, time), "SESSION_SUPERSEDED")
+                    } else {
+                        if (next.sounding) before.filter { previous ->
+                            previous.firedAt > 0 && replaces(previous, next, ungrouped)
+                        }.forEach { previous ->
+                            put(previous, WakeMachine.supersede(previous, time), "SESSION_SUPERSEDED")
+                        }
+                        put(run, next)
+                    }
                     val updated = if (plan.days.isEmpty()) plan.copy(enabled = false)
                         else plan.copy(lastFiredEpochDay = day)
                     dao.putAlarm(updated.row())
@@ -414,13 +426,11 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
     suspend fun restore(recalculate: Boolean = false, recoverSound: Boolean = true) = mutex.withLock {
         val before = runs()
         db.withTransaction {
-            val fired = before.asSequence().filter { it.firedAt > 0 }
-                .groupBy { it.plan.id }.mapValues { (_, sessions) -> sessions.maxBy { it.scheduledAt } }
+            val ungrouped = app.settings.deduplicateEnabled()
+            val fired = before.filter { it.firedAt > 0 }
             before.forEach { run ->
-                val newest = fired[run.plan.id]
-                val retired = if (newest == null) run else WakeMachine.supersede(run, newest, now())
-                if (retired != run) {
-                    put(run, retired, "SESSION_SUPERSEDED")
+                if (run.firedAt > 0 && fired.any { replaces(run, it, ungrouped) }) {
+                    put(run, WakeMachine.supersede(run, now()), "SESSION_SUPERSEDED")
                     return@forEach
                 }
                 if (run.sounding) {

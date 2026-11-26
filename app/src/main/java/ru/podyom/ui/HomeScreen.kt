@@ -184,11 +184,15 @@ import java.util.UUID
                     item { Text("Твои пробуждения", style = MaterialTheme.typography.headlineLarge); Text("Статистика взаимодействий, а не оценка физиологического бодрствования.") }
                     item { var days by rememberSaveable { mutableIntStateOf(7) }; Row { listOf(7,30).forEach { n -> FilterChip(selected = days == n, onClick = { days=n }, label = { Text("$n дней") }, modifier = Modifier.padding(end=8.dp)) } }; val recent = runs.filter { it.firedAt >= calendarNow.longValue - days*86400000L && it.firedAt > 0 }; StatsCard(recent); MiniBars((days-1 downTo 0).map { back -> val d = LocalDate.now().minusDays(back.toLong()); recent.count { Instant.ofEpochMilli(it.firedAt).atZone(ZoneId.systemDefault()).toLocalDate() == d }.toFloat() }) }
                     item { ru.podyom.statistics.WakeCalendar(runs) }
-                    items(runs.filter { it.firedAt > 0 || it.state in setOf(RunState.CANCELLED, RunState.MISSED) }.sortedByDescending { it.updatedAt }.take(50), key={it.id}) { r -> Card { Column(Modifier.fillMaxWidth().padding(16.dp)) { Text(date(r.updatedAt)); Text(stateLabel(r.state)); Text("Повторы: ${r.cycle} · Отложено: ${r.snoozes} · Без ответа: ${r.missedChecks}", style = MaterialTheme.typography.bodySmall); if(r.emergency) Text("Аварийное завершение", color = MaterialTheme.colorScheme.tertiary) } } }
+                    items(runs.filter { it.firedAt > 0 || it.state in setOf(RunState.CANCELLED, RunState.MISSED) }.sortedByDescending { it.updatedAt }.take(50), key={it.id}) { r -> Card { Column(Modifier.fillMaxWidth().padding(16.dp)) { Text(date(r.updatedAt)); Text(if (r.disposition == "superseded") "Пропущен — заменён следующим будильником" else stateLabel(r.state)); Text("Повторы: ${r.cycle} · Отложено: ${r.snoozes} · Без ответа: ${r.missedChecks}", style = MaterialTheme.typography.bodySmall); if(r.emergency) Text("Аварийное завершение", color = MaterialTheme.colorScheme.tertiary) } } }
                 }
                 3 -> {
                     item { Text("Как тебе удобно", style = MaterialTheme.typography.headlineLarge) }
                     item { ToggleRow("Светлая тема", settings.light, vm::light); ToggleRow("24-часовой формат", settings.clock24, vm::clock24) }
+                    item {
+                        ToggleRow("Не накапливать пропущенные будильники", settings.deduplicate, vm::deduplicate)
+                        Text("Следующий обычный будильник заменит прежнее незавершённое задание в пределах 90 минут одного дня.", style = MaterialTheme.typography.bodySmall)
+                    }
                     item { ru.podyom.permissions.WakeCheckSettings(settings.enhancedCheck,vm::enhanced) }
                     item { ru.podyom.permissions.ScheduleDiagnostics(runs, rows) }
                     if (audioEvents.isNotEmpty()) item {

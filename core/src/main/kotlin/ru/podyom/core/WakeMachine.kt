@@ -51,12 +51,8 @@ object WakeMachine {
     fun expireRing(run: AlarmRun, now: Long): AlarmRun =
         if (run.sounding && now >= ringExpiresAt(run)) run.copy(state = RunState.MISSED).changed(now) else run
 
-    /** A new occurrence can replace the unfinished session of the same alarm. */
-    fun supersede(run: AlarmRun, newer: AlarmRun, now: Long): AlarmRun {
-        if (run.id == newer.id || run.plan.id != newer.plan.id || run.scheduledAt >= newer.scheduledAt ||
-            newer.firedAt <= 0 || run.state == RunState.SCHEDULED || run.terminal) return run
-        return run.copy(state = RunState.MISSED, deadline = 0).changed(now)
-    }
+    fun supersede(run: AlarmRun, now: Long): AlarmRun =
+        run.copy(state = RunState.MISSED, deadline = 0, disposition = "superseded").changed(now)
 
     fun cancel(r: AlarmRun, now: Long, emergency: Boolean = false): AlarmRun =
         if (r.terminal) r else r.copy(state = RunState.CANCELLED, emergency = emergency, deadline = 0).changed(now)
