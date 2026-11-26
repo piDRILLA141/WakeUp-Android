@@ -331,6 +331,62 @@ class AlarmEngineTest {
         assertEquals(RunState.MISSED, runs().first { it.id == early.id }.state)
     }
 
+    @Test fun groupSwitchPreservesTheIndividualSwitchesAndRemovingGroupKeepsPlans() = runBlocking {
+        monday(5)
+        val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })
+        val group = coordinator.createGroup("Школа")
+        coordinator.save(daily("on").copy(groupId = group.id), PrivateAlarm())
+        coordinator.save(daily("off").copy(groupId = group.id, enabled = false), PrivateAlarm())
+        coordinator.setGroupEnabled(group.id, false)
+        assertTrue(runs().none { it.state == RunState.SCHEDULED })
+        coordinator.restore()
+        assertTrue(runs().none { it.state == RunState.SCHEDULED })
+        coordinator.setGroupEnabled(group.id, true)
+        assertEquals(listOf("on"), runs().filter { it.state == RunState.SCHEDULED }.map { it.plan.id })
+        coordinator.removeGroup(group.id, deleteAlarms = false)
+        assertTrue(app.runtime.dao().alarms().all { it.model().groupId == null })
+        assertEquals(2, app.runtime.dao().alarms().size)
+        assertEquals(1, runs().count { it.state == RunState.SCHEDULED })
+    }
+
+    @Test fun backupsAreCancelledOnlyAfterLastCheckAndCanBeRestored() = runBlocking {
+        val day = monday(5)
+        val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })
+        val group = coordinator.createGroup("Школа", cancelBackups = true)
+        val otherGroup = coordinator.createGroup("Другой")
+        coordinator.save(daily("primary").copy(groupId = group.id, checkCount = 2, laterCheckSeconds = 10,
+            wakeDelaySeconds = 10, missions = listOf(MissionSpec(count = 1))), PrivateAlarm())
+        coordinator.save(daily("backup", 20).copy(groupId = group.id), PrivateAlarm())
+        coordinator.save(daily("independent", 25).copy(groupId = group.id, independent = true), PrivateAlarm())
+        coordinator.save(daily("other", 30).copy(groupId = otherGroup.id), PrivateAlarm())
+        coordinator.save(daily("evening").copy(groupId = group.id, hour = 20), PrivateAlarm())
+        val primary = runs().first { it.plan.id == "primary" }
+        val backup = runs().first { it.plan.id == "backup" }
+        clock = primary.eventAt
+        coordinator.event(primary.id, primary.version)
+        coordinator.update(primary.id, WakeMachine::startMission)
+        coordinator.update(primary.id) { run, now -> WakeMachine.progress(run, run.version, now) }
+        assertEquals(RunState.SCHEDULED, runs().first { it.id == backup.id }.state)
+        repeat(2) { index ->
+            val scheduled = runs().first { it.id == primary.id }
+            clock = scheduled.eventAt
+            coordinator.event(scheduled.id, scheduled.version)
+            val active = runs().first { it.id == primary.id }
+            assertEquals(CheckConfirmation.ACCEPTED, coordinator.confirmWake(active.checkKey))
+            if (index == 0) assertEquals(RunState.SCHEDULED, runs().first { it.id == backup.id }.state)
+        }
+        assertEquals(1, coordinator.cancelledBackups(primary.id))
+        assertEquals("backup", runs().first { it.id == backup.id }.disposition)
+        coordinator.restore(recalculate = true, recoverSound = false)
+        assertEquals(instant(day.plusDays(1), 6, 20), runs().single { it.plan.id == "backup" && it.state == RunState.SCHEDULED }.eventAt)
+        for (id in listOf("other", "independent", "evening")) {
+            val time = runs().single { it.plan.id == id && it.state == RunState.SCHEDULED }.eventAt
+            assertEquals(day, Instant.ofEpochMilli(time).atZone(testZone).toLocalDate())
+        }
+        coordinator.restoreBackup("backup")
+        assertEquals(backup.eventAt, runs().single { it.plan.id == "backup" && it.state == RunState.SCHEDULED }.eventAt)
+    }
+
     @Test fun laterRingsPreemptAndEndingQueueLeavesFutureAlarmsAndWakeChecks() = runBlocking {
         val day = monday(5)
         val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })

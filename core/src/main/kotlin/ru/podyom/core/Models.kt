@@ -42,6 +42,7 @@ import kotlinx.serialization.Serializable
     val oneShotAt: Long? = null,
     val skipEpochDays: Set<Long> = emptySet(),
     val lastFiredEpochDay: Long? = null,
+    val automaticSkipDay: Long? = null,
     val independent: Boolean = false,
     val groupId: String? = null,
 ) {
@@ -58,6 +59,9 @@ import kotlinx.serialization.Serializable
         require(volume in 0.05f..1f && rampSeconds in 0..120)
     }
 }
+@Serializable
+data class AlarmGroup(val id: String, val enabled: Boolean = true, val cancelBackups: Boolean = false)
+
 @Serializable data class PrivateAlarm(
     val title: String = "Новое утро",
     val soundUri: String = "",
@@ -93,6 +97,7 @@ import kotlinx.serialization.Serializable
     val ringingSince: Long? = null,
     val ringDeadlineElapsed: Long? = null,
     val disposition: String? = null,
+    val cancelledBackups: Int = 0,
 ) {
     val terminal get() = state == RunState.COMPLETED || state == RunState.CANCELLED || state == RunState.MISSED
     val sounding get() = state in setOf(RunState.RINGING, RunState.MISSION_RUNNING, RunState.RE_RINGING)

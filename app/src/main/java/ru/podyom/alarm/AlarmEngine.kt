@@ -40,7 +40,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                 RunState.RE_RINGING -> TechnicalEvent.RE_RING_STARTED
                 RunState.WAITING_WAKE_CHECK -> TechnicalEvent.WAKE_CHECK_SCHEDULED
                 RunState.WAKE_CHECK_ACTIVE -> TechnicalEvent.WAKE_CHECK_STARTED
-                RunState.MISSED -> if (reason == "SESSION_SUPERSEDED") TechnicalEvent.ALARM_SUPERSEDED else TechnicalEvent.ALARM_MISSED
+                RunState.MISSED -> if (reason == "SESSION_SUPERSEDED") TechnicalEvent.ALARM_SUPERSEDED else if (reason == "BACKUP_ALARM_CANCELLED") TechnicalEvent.BACKUP_ALARM_CANCELLED else TechnicalEvent.ALARM_MISSED
                 else -> null
             }
             val journal = app.journal
@@ -129,9 +129,94 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
     suspend fun snapshot(): List<AlarmRun> = mutex.withLock { runs() }
     suspend fun profile(key: String): PrivateAlarm? = if (app.unlocked)
         app.privateDb.dao().profile(key)?.let { codec.decodeFromString<PrivateAlarm>(it.json) } else null
+    private suspend fun groupAllows(plan: AlarmPlan): Boolean =
+        plan.groupId?.let { dao.group(it)?.model()?.enabled } != false
+
+    suspend fun createGroup(name: String, ids: Set<String> = emptySet(), enabled: Boolean = true, cancelBackups: Boolean = false): AlarmGroup = mutex.withLock {
+        val title = name.trim()
+        require(title.length in 1..60) { "Название группы должно содержать от 1 до 60 символов" }
+        val group = AlarmGroup(UUID.randomUUID().toString(), enabled, cancelBackups)
+        app.privateDb.dao().putProfile(ProfileRow(group.id, codec.encodeToString(PrivateAlarm(title = title))))
+        val members = dao.alarms().map { it.model() }.filter { it.id in ids && !it.quick }
+        changeMembership(members, group) { dao.putGroup(group.row()) }
+        app.journal.report(TechnicalEvent.GROUP_CREATED, group.id)
+        group
+    }
+
+    suspend fun editGroup(id: String, name: String, cancelBackups: Boolean) = mutex.withLock {
+        val group = dao.group(id)?.model() ?: error("Группа не найдена")
+        val title = name.trim()
+        require(title.length in 1..60) { "Название группы должно содержать от 1 до 60 символов" }
+        app.privateDb.dao().putProfile(ProfileRow(id, codec.encodeToString(PrivateAlarm(title = title))))
+        dao.putGroup(group.copy(cancelBackups = cancelBackups).row())
+    }
+
+    suspend fun moveAlarms(ids: Set<String>, target: String?) = mutex.withLock {
+        val group = target?.let { dao.group(it)?.model() ?: error("Группа не найдена") }
+        val members = dao.alarms().map { it.model() }.filter { it.id in ids && !it.quick && it.groupId != target }
+        changeMembership(members, group)
+        app.journal.report(TechnicalEvent.GROUP_SCHEDULE_CHANGED, target)
+    }
+
+    suspend fun setGroupEnabled(id: String, enabled: Boolean) = mutex.withLock {
+        val group = dao.group(id)?.model() ?: return@withLock
+        if (group.enabled == enabled) return@withLock
+        val updated = group.copy(enabled = enabled)
+        changeMembership(dao.alarms().map { it.model() }.filter { it.groupId == id }, updated) {
+            dao.putGroup(updated.row())
+        }
+        app.journal.report(TechnicalEvent.GROUP_SCHEDULE_CHANGED, id)
+    }
+
+    suspend fun removeGroup(id: String, deleteAlarms: Boolean) = mutex.withLock {
+        val group = dao.group(id)?.model() ?: return@withLock
+        val plans = dao.alarms().map { it.model() }.filter { it.groupId == group.id }
+        if (deleteAlarms) {
+            val before = runs()
+            val ids = plans.mapTo(mutableSetOf()) { it.id }
+            db.withTransaction {
+                before.filter { it.plan.id in ids }.forEach { put(it, WakeMachine.cancel(it, now())) }
+                ids.forEach { dao.deleteAlarm(it) }
+                dao.deleteGroup(id)
+            }
+            reconcile(before)
+        } else {
+            changeMembership(plans, null) { dao.deleteGroup(id) }
+        }
+        app.journal.report(TechnicalEvent.GROUP_SCHEDULE_CHANGED, id)
+    }
+
+    private suspend fun changeMembership(plans: List<AlarmPlan>, group: AlarmGroup?, persistGroup: suspend () -> Unit = {}) {
+        val pending = runs().filter { it.state == RunState.SCHEDULED }.associateBy { it.plan.id }
+        val kept = mutableListOf<AlarmRun>()
+        val changes = plans.map { original ->
+            val previous = pending[original.id]
+            val shouldSchedule = original.enabled && group?.enabled != false
+            val plan = original.copy(groupId = group?.id,
+                oneShotAt = original.oneShotAt ?: previous?.scheduledAt?.takeIf { !shouldSchedule && original.days.isEmpty() })
+            if (shouldSchedule && previous != null) {
+                if (previous.plan.groupId != plan.groupId) kept += previous.copy(plan = previous.plan.copy(groupId = plan.groupId))
+                ScheduleChange(plan, null, null)
+            } else {
+                ScheduleChange(plan, previous, if (shouldSchedule) newOccurrence(plan, now(), zoneId()) else null)
+            }
+        }
+        try {
+            applyScheduleChanges(changes) {
+                persistGroup()
+                kept.forEach { dao.putRun(it.row()) }
+            }
+        } catch (error: IllegalStateException) {
+            app.journal.report(TechnicalEvent.GROUP_OPERATION_FAILED, group?.id, code = "registration")
+            throw error
+        }
+    }
+
     suspend fun save(plan: AlarmPlan, profile: PrivateAlarm, testAt: Long? = null) = mutex.withLock {
         plan.validate()
-        if (plan.enabled && !app.scheduler.allowed()) {
+        require(!plan.quick || plan.groupId == null) { "Быстрый будильник не входит в группу" }
+        require(plan.groupId?.let { dao.group(it) != null } != false) { "Группа не найдена" }
+        if (plan.enabled && groupAllows(plan) && !app.scheduler.allowed()) {
             app.journal.report(TechnicalEvent.PERMISSION_MISSING, code = "exact_alarm")
             error("Разрешите точные будильники в настройках Android")
         }
@@ -151,10 +236,11 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
             privateKey = UUID.randomUUID().toString(),
             skipEpochDays = if (oldPlan != null) oldPlan.skipEpochDays else plan.skipEpochDays,
             lastFiredEpochDay = oldPlan?.lastFiredEpochDay,
+            automaticSkipDay = oldPlan?.automaticSkipDay ?: plan.automaticSkipDay,
         )
         app.privateDb.dao().putProfile(ProfileRow(saved.privateKey, codec.encodeToString(profile)))
         val previous = runs().firstOrNull { it.plan.id == saved.id && it.state == RunState.SCHEDULED }
-        val next = if (saved.enabled) {
+        val next = if (saved.enabled && groupAllows(saved)) {
             if (testAt != null) occurrence(saved, testAt) else newOccurrence(saved, now(), zoneId())
         } else null
         applyScheduleChanges(listOf(ScheduleChange(saved, previous, next, keepCancelled = true)))
@@ -162,7 +248,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
     suspend fun duplicateLater(id: String): AlarmPlan {
         val original = mutex.withLock { dao.alarms().first { it.id == id }.model() }
         val at = mutex.withLock { runs().firstOrNull { it.plan.id == id && it.state == RunState.SCHEDULED }?.scheduledAt }
-        val copy = AlarmShortcuts.copyForNext(original.copy(skipEpochDays = emptySet(), lastFiredEpochDay = null), UUID.randomUUID().toString(), Instant.ofEpochMilli(now()), zoneId(),at)
+        val copy = AlarmShortcuts.copyForNext(original.copy(skipEpochDays = emptySet(), lastFiredEpochDay = null, automaticSkipDay = null), UUID.randomUUID().toString(), Instant.ofEpochMilli(now()), zoneId(),at)
         save(copy, profile(original.privateKey) ?: error("Личные настройки недоступны: разблокируйте телефон"))
         return copy
     }
@@ -205,11 +291,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         val passed = Missions.math(run.seed + run.checkIndex + run.cycle, 1).answer == answer.toIntOrNull()
         val confirmed = WakeMachine.confirm(run, time, passed)
         if (confirmed == run) return@withLock CheckConfirmation.WRONG_ANSWER
-        db.withTransaction {
-            put(run, confirmed)
-            app.journal.recordInTransaction(TechnicalEvent.WAKE_CHECK_CONFIRMED, run)
-        }
-        reconcile(before)
+        completeTransition(before, run, confirmed, finalWakeCheck = true)
         CheckConfirmation.ACCEPTED
     }
     suspend fun cancelCheck(key: CheckKey) = mutex.withLock {
@@ -227,25 +309,24 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
             return
         }
         mutex.withLock {
-            check(app.scheduler.allowed()) { "Нет разрешения на точные будильники" }
             val plan = dao.alarms().firstOrNull { it.id == id }?.model() ?: return@withLock
             if (plan.enabled) return@withLock
             val updated = plan.copy(enabled = true, skipEpochDays = emptySet(),
                 oneShotAt = plan.oneShotAt?.takeIf { it > now() })
-            applyScheduleChanges(listOf(ScheduleChange(updated, null, newOccurrence(updated, now(), zoneId()))))
+            applyScheduleChanges(listOf(ScheduleChange(updated, null, if (groupAllows(updated)) newOccurrence(updated, now(), zoneId()) else null)))
         }
     }
 
     data class BulkResult(val changed: Int, val notScheduled: Int, val alreadySkipped: Int = 0)
 
-    suspend fun skipTomorrow(ids: Set<String>, allowOneShot: Boolean): BulkResult = mutex.withLock {
+    suspend fun skipTomorrow(ids: Set<String>, allowOneShot: Boolean, groupId: String? = null): BulkResult = mutex.withLock {
         val timestamp = now()
         val zone = zoneId()
         val tomorrow = Instant.ofEpochMilli(timestamp).atZone(zone).toLocalDate().plusDays(1)
-        val plans = dao.alarms().map { it.model() }.filter { it.id in ids }
+        val plans = dao.alarms().map { it.model() }.filter { if (groupId != null) it.groupId == groupId else it.id in ids }
         val pending = runs().filter { it.state == RunState.SCHEDULED }.associateBy { it.plan.id }
         val changed = mutableListOf<ScheduleChange>()
-        var unavailable = ids.size - plans.size
+        var unavailable = if (groupId == null) ids.size - plans.size else 0
         var already = 0
         plans.forEach { plan ->
             val existing = pending[plan.id]
@@ -260,30 +341,46 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                         oneShotAt = if (plan.days.isEmpty()) existing?.scheduledAt ?: plan.oneShotAt else null,
                     )
                     val keep = existing?.takeIf { it.scheduledAt.asLocalDate(zone) != tomorrow }
-                    val replacement = if (keep != null) null else newOccurrence(updated, timestamp, zone)
+                    val replacement = if (keep != null || !groupAllows(updated)) null else newOccurrence(updated, timestamp, zone)
                     changed += ScheduleChange(updated, if (keep == null) existing else null, replacement)
                 }
             }
         }
         applyScheduleChanges(changed)
+        if (groupId != null && changed.isNotEmpty()) app.journal.report(TechnicalEvent.GROUP_SKIPPED, groupId)
         BulkResult(changed.size, unavailable, already)
     }
 
     suspend fun undoSkip(id: String, epochDay: Long? = null) = mutex.withLock {
         val plan = dao.alarms().firstOrNull { it.id == id }?.model() ?: return@withLock
         val day = epochDay ?: plan.skipEpochDays.maxOrNull() ?: return@withLock
-        if (day !in plan.skipEpochDays) return@withLock
+        val pending = runs().firstOrNull { it.plan.id == id && it.state == RunState.SCHEDULED }
+        undoSkipChange(plan, pending, day, now(), zoneId())?.let { applyScheduleChanges(listOf(it)) }
+    }
+
+    suspend fun undoGroupSkip(id: String): Int = mutex.withLock {
         val time = now()
         val zone = zoneId()
+        val tomorrow = time.asLocalDate(zone).plusDays(1).toEpochDay()
+        val pending = runs().filter { it.state == RunState.SCHEDULED }.associateBy { it.plan.id }
+        val changes = dao.alarms().map { it.model() }.filter { it.groupId == id }
+            .mapNotNull { undoSkipChange(it, pending[it.id], tomorrow, time, zone) }
+        if (changes.isNotEmpty()) {
+            applyScheduleChanges(changes)
+            app.journal.report(TechnicalEvent.GROUP_SKIP_RESTORED, id)
+        }
+        changes.size
+    }
+
+    private suspend fun undoSkipChange(plan: AlarmPlan, existing: AlarmRun?, day: Long, time: Long, zone: ZoneId): ScheduleChange? {
+        if (day !in plan.skipEpochDays) return null
         val updated = plan.copy(skipEpochDays = plan.skipEpochDays - day)
         if (plan.days.isEmpty() && (plan.oneShotAt ?: Long.MIN_VALUE) <= time) {
-            applyScheduleChanges(listOf(ScheduleChange(updated.copy(enabled = false), null, null)))
-            return@withLock
+            return ScheduleChange(updated.copy(enabled = false), existing, null)
         }
-        val existing = runs().firstOrNull { it.plan.id == id && it.state == RunState.SCHEDULED }
-        val occurrence = if (updated.enabled) newOccurrence(updated, time, zone) else null
+        val occurrence = if (updated.enabled && groupAllows(updated)) newOccurrence(updated, time, zone) else null
         val unchanged = existing?.scheduledAt == occurrence?.scheduledAt
-        applyScheduleChanges(listOf(ScheduleChange(updated, if (unchanged) null else existing, if (unchanged) null else occurrence)))
+        return ScheduleChange(updated, if (unchanged) null else existing, if (unchanged) null else occurrence)
     }
 
     suspend fun disableAll(ids: Set<String>): Int = mutex.withLock {
@@ -300,10 +397,11 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         val previous: AlarmRun?,
         val next: AlarmRun?,
         val keepCancelled: Boolean = false,
+        val automaticallySkipped: Boolean = false,
     )
 
     private fun newOccurrence(plan: AlarmPlan, timestamp: Long, zone: ZoneId): AlarmRun? =
-        Schedule.nextOrNull(plan, Instant.ofEpochMilli(timestamp), zone)?.toEpochMilli()?.let {
+        Schedule.nextOrNull(plan, Instant.ofEpochMilli(timestamp), zone)?.toEpochMilli()?.takeIf { it > timestamp }?.let {
             occurrence(plan, it)
         }
 
@@ -314,8 +412,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
      * prevents their receivers from resolving those IDs until the transaction is committed.
      * The old alarms remain registered if any replacement registration fails.
      */
-    private suspend fun applyScheduleChanges(changes: List<ScheduleChange>) = withContext(NonCancellable) {
-        if (changes.isEmpty()) return@withContext
+    private suspend fun applyScheduleChanges(changes: List<ScheduleChange>, commit: suspend () -> Unit = {}) = withContext(NonCancellable) {
         val replacements = changes.mapNotNull { it.next }
         if (replacements.isNotEmpty()) {
             check(app.scheduler.allowed()) { "Нет разрешения на точные будильники. Расписание сохранено." }
@@ -330,7 +427,10 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                 changes.forEach { change ->
                     dao.putAlarm(change.plan.row())
                     change.previous?.let {
-                        if (change.keepCancelled) {
+                        if (change.automaticallySkipped) {
+                            put(it, it.copy(state = RunState.MISSED, version = it.version + 1,
+                                updatedAt = now(), disposition = "backup"), "BACKUP_ALARM_CANCELLED")
+                        } else if (change.keepCancelled) {
                             put(it, WakeMachine.cancel(it, now()))
                         } else {
                             // A skipped placeholder is not a ringing or missed occurrence.
@@ -340,6 +440,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                     }
                     change.next?.let { put(null, it) }
                 }
+                commit()
             }
         } catch (e: Exception) {
             staged.forEach { runCatching { app.scheduler.cancel(it) } }
@@ -381,7 +482,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
             } else {
                 val plan = dao.alarms().firstOrNull { it.id == run.plan.id }?.model()
                 val day = run.scheduledAt.asLocalDate(zoneId()).toEpochDay()
-                if (plan?.enabled == true && day !in plan.skipEpochDays &&
+                if (plan?.enabled == true && groupAllows(plan) && day !in plan.skipEpochDays && day != plan.automaticSkipDay &&
                     (plan.days.isEmpty() || plan.lastFiredEpochDay != day)) {
                     val ungrouped = app.settings.deduplicateEnabled()
                     val recent = if (next.sounding) dao.completedNear(run.scheduledAt,
@@ -408,7 +509,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                 } else {
                     dao.deletePendingRun(run.id)
                     dao.deleteScheduledEvent(run.id)
-                    if (plan?.enabled == true) {
+                    if (plan?.enabled == true && groupAllows(plan)) {
                         newOccurrence(plan, time, zoneId())?.let { put(null, it) }
                     }
                 }
@@ -420,9 +521,73 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         val before = runs(); val run = before.firstOrNull { it.id == id } ?: return@withLock
         val changed = operation(run, now())
         if (changed == run) return@withLock
-        db.withTransaction { put(run, changed) }
+        completeTransition(before, run, changed, finalWakeCheck = false)
+    }
+
+    suspend fun cancelledBackups(runId: String): Int = dao.run(runId)?.model()?.cancelledBackups ?: 0
+
+    private suspend fun completeTransition(before: List<AlarmRun>, previous: AlarmRun, next: AlarmRun, finalWakeCheck: Boolean) {
+        // Only the final accepted check or successful completion of all missions can cancel backups.
+        val reachedGoal = next.state == RunState.COMPLETED &&
+            (finalWakeCheck || (!previous.plan.wakeCheck && previous.state == RunState.MISSION_RUNNING))
+        val group = previous.plan.groupId?.let { dao.group(it)?.model() }
+        val backups = if (reachedGoal && !previous.plan.independent && group?.enabled == true &&
+            group.cancelBackups) backupChanges(before, previous) else emptyList()
+        if (backups.isNotEmpty()) {
+            val applied = try {
+                applyScheduleChanges(backups) {
+                    put(previous, next.copy(cancelledBackups = backups.size))
+                    if (finalWakeCheck) app.journal.recordInTransaction(TechnicalEvent.WAKE_CHECK_CONFIRMED, previous)
+                    app.journal.recordInTransaction(TechnicalEvent.GROUP_WAKE_CONFIRMED, previous)
+                }
+                true
+            } catch (_: IllegalStateException) {
+                app.journal.report(TechnicalEvent.GROUP_OPERATION_FAILED, group?.id, code = "registration")
+                false
+            }
+            if (applied) {
+                val oldBackups = backups.mapNotNull { it.previous?.id }.toSet()
+                reconcile(before.filterNot { it.id in oldBackups } + backups.mapNotNull { it.next })
+                return
+            }
+        }
+        db.withTransaction {
+            put(previous, next)
+            if (finalWakeCheck) app.journal.recordInTransaction(TechnicalEvent.WAKE_CHECK_CONFIRMED, previous)
+        }
         reconcile(before)
     }
+
+    private suspend fun backupChanges(before: List<AlarmRun>, confirmed: AlarmRun): List<ScheduleChange> {
+        val time = now()
+        val zone = zoneId()
+        val plans = dao.alarms().map { it.model() }.associateBy { it.id }
+        return before.mapNotNull { pending ->
+            val plan = plans[pending.plan.id] ?: return@mapNotNull null
+            if (pending.state != RunState.SCHEDULED || !plan.enabled || plan.id == confirmed.plan.id ||
+                plan.quick || plan.independent || plan.groupId != confirmed.plan.groupId ||
+                pending.scheduledAt <= time || pending.scheduledAt <= confirmed.scheduledAt ||
+                !WakeSessions.inWindow(confirmed.scheduledAt, pending.scheduledAt, zone)) return@mapNotNull null
+            val updated = plan.copy(automaticSkipDay = pending.scheduledAt.asLocalDate(zone).toEpochDay(),
+                oneShotAt = if (plan.days.isEmpty()) pending.scheduledAt else null)
+            ScheduleChange(updated, pending, newOccurrence(updated, time, zone), automaticallySkipped = true)
+        }
+    }
+
+    suspend fun restoreBackup(id: String) = mutex.withLock {
+        val plan = dao.alarms().firstOrNull { it.id == id }?.model() ?: return@withLock
+        val day = plan.automaticSkipDay ?: return@withLock
+        val zone = zoneId()
+        val at = if (plan.days.isEmpty()) plan.oneShotAt else LocalDate.ofEpochDay(day)
+            .atTime(plan.hour, plan.minute).atZone(zone).withEarlierOffsetAtOverlap().toInstant().toEpochMilli()
+        require(at != null && at > now()) { "Время отменённого сигнала уже прошло" }
+        val updated = plan.copy(automaticSkipDay = null)
+        val pending = runs().firstOrNull { it.plan.id == id && it.state == RunState.SCHEDULED }
+        val replacement = if (plan.enabled && groupAllows(updated)) newOccurrence(updated, now(), zone) else null
+        applyScheduleChanges(listOf(ScheduleChange(updated, pending, replacement)))
+        app.journal.report(TechnicalEvent.BACKUP_ALARM_RESTORED, id)
+    }
+
     suspend fun restore(recalculate: Boolean = false, recoverSound: Boolean = true) = mutex.withLock {
         val before = runs()
         db.withTransaction {
@@ -456,10 +621,16 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                 }
             }
             // Restore the saved date exclusion before creating or re-registering an occurrence.
+            val scheduled = runs().filter { it.state == RunState.SCHEDULED }.associateBy { it.plan.id }
             dao.alarms().map { it.model() }.filter { it.enabled }.forEach { plan ->
-                val pending = runs().firstOrNull { it.plan.id == plan.id && it.state == RunState.SCHEDULED }
-                val excluded = pending != null && plan.skipEpochDays.isNotEmpty() &&
-                    (plan.days.isEmpty() || pending.scheduledAt.asLocalDate(zoneId()).toEpochDay() in plan.skipEpochDays)
+                if (!groupAllows(plan)) {
+                    scheduled[plan.id]?.let { dao.deletePendingRun(it.id); dao.deleteScheduledEvent(it.id) }
+                    return@forEach
+                }
+                val pending = scheduled[plan.id]
+                val excluded = pending != null && (pending.scheduledAt.asLocalDate(zoneId()).toEpochDay() == plan.automaticSkipDay ||
+                    (plan.skipEpochDays.isNotEmpty() && (plan.days.isEmpty() ||
+                        pending.scheduledAt.asLocalDate(zoneId()).toEpochDay() in plan.skipEpochDays)))
                 if (excluded && pending != null) {
                     dao.deletePendingRun(pending.id)
                     dao.deleteScheduledEvent(pending.id)
