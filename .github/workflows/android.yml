@@ -187,6 +187,15 @@ jobs:
           EMULATOR_OUTCOME: ${{ steps.instrumentation.outcome }}
         run: |
           python3 scripts/package-check-results.py "$RUNNER_TEMP/podyom/results" --build-outcome "$BUILD_OUTCOME" --build-log "$RUNNER_TEMP/podyom-build.log" --emulator-outcome "$EMULATOR_OUTCOME"
+          if [ -f app/build/reports/lint-results-debug.xml ]; then
+            python3 - <<'PY'
+          import collections
+          import xml.etree.ElementTree as ET
+          issues = ET.parse("app/build/reports/lint-results-debug.xml").getroot().findall("issue")
+          for (severity, rule), count in sorted(collections.Counter((issue.get("severity"), issue.get("id")) for issue in issues).items()):
+              print(f"Lint {severity} {rule}: {count}")
+          PY
+          fi
           if [ -f app/schemas/ru.podyom.data.RuntimeDatabase/3.json ]; then
             cp -r app/schemas "$RUNNER_TEMP/podyom/results/"
             python3 -c 'import json; print("Room 3 identity: " + json.load(open("app/schemas/ru.podyom.data.RuntimeDatabase/3.json"))["database"]["identityHash"])'

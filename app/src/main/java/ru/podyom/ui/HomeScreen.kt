@@ -179,18 +179,18 @@ import java.util.UUID
                     val members = ordered.groupBy { it.groupId }
                     fun androidx.compose.foundation.lazy.LazyListScope.alarmItems(plans: List<AlarmPlan>) {
                         items(plans, key = { it.id }) { alarm ->
-                        val profile = profiles[alarm.privateKey] ?: PrivateAlarm()
-                        val next = scheduled[alarm.id]
-                        val today = Instant.ofEpochMilli(calendarNow.longValue).atZone(ZoneId.systemDefault()).toLocalDate()
-                        AlarmCard(alarm, profile, settings.clock24, next, today, selecting, alarm.id in selectedIds,
-                            edit = { if (selecting) select(alarm.id) else editor = alarm.id },
-                            longPress = { select(alarm.id) }, toggle = { enabled ->
-                                if (enabled) vm.enabled(alarm.id, true) else openSchedule(listOf(alarm.id), "choose")
-                            }, duplicate = { vm.duplicate(alarm, profile) },
-                            undoSkip = { day -> vm.undoSkip(alarm.id, day) },
-                            delete = { confirm = "Удалить «${profile.title}» вместе с его активными проверками?" to { vm.delete(alarm.id) } },
-                            move = if (!alarm.quick && groups.isNotEmpty()) ({ moveTo = alarm.id }) else null,
-                            restoreBackup = { vm.restoreBackup(alarm.id) })
+                            val profile = profiles[alarm.privateKey] ?: PrivateAlarm()
+                            val next = scheduled[alarm.id]
+                            val today = Instant.ofEpochMilli(calendarNow.longValue).atZone(ZoneId.systemDefault()).toLocalDate()
+                            AlarmCard(alarm, profile, settings.clock24, next, today, selecting, alarm.id in selectedIds,
+                                edit = { if (selecting) select(alarm.id) else editor = alarm.id },
+                                longPress = { select(alarm.id) }, toggle = { enabled ->
+                                    if (enabled) vm.enabled(alarm.id, true) else openSchedule(listOf(alarm.id), "choose")
+                                }, duplicate = { vm.duplicate(alarm, profile) },
+                                undoSkip = { day -> vm.undoSkip(alarm.id, day) },
+                                delete = { confirm = "Удалить «${profile.title}» вместе с его активными проверками?" to { vm.delete(alarm.id) } },
+                                move = if (!alarm.quick && groups.isNotEmpty()) ({ moveTo = alarm.id }) else null,
+                                restoreBackup = { vm.restoreBackup(alarm.id) })
                         }
                     }
                     alarmItems(members[null].orEmpty())
@@ -312,7 +312,9 @@ import java.util.UUID
                     selectedIds = arrayListOf()
                 } else vm.editGroup(id, name, cancelBackups) { groupDialog = null }
             },
-            onRemove = { alarmId -> vm.moveToGroup(setOf(alarmId), null) {} })
+            onRemove = { alarmId -> vm.moveToGroup(setOf(alarmId), null) {} },
+            onSkip = { groupDialog = null; openSchedule(alarms.filter { it.groupId == id }.map { it.id }, "skip", id) },
+            onUndoSkip = { vm.undoGroupSkip(id) })
     }
     addingMembers?.let { id ->
         AddGroupAlarmsDialog(alarms.filter { !it.quick && it.groupId != id }, profiles, busy,

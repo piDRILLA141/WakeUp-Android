@@ -411,6 +411,29 @@ class AlarmEngineTest {
         assertEquals("new", following.plan.id)
     }
 
+    @Test fun successfulMissionWithoutWakeCheckCancelsBackupsOnlyForAnOptedInGroup() = runBlocking {
+        val day = monday(5)
+        val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })
+        for (cancelBackups in listOf(false, true)) {
+            val group = coordinator.createGroup("Группа $cancelBackups", cancelBackups = cancelBackups)
+            val id = "primary-$cancelBackups"
+            val backupId = "backup-$cancelBackups"
+            clock = instant(day, 5)
+            coordinator.save(daily(id).copy(groupId = group.id, wakeCheck = false,
+                missions = listOf(MissionSpec(count = 1))), PrivateAlarm())
+            coordinator.save(daily(backupId, 20).copy(groupId = group.id), PrivateAlarm())
+            val first = runs().single { it.plan.id == id }
+            val backup = runs().single { it.plan.id == backupId }
+            clock = first.eventAt
+            coordinator.event(first.id, first.version)
+            coordinator.update(first.id, WakeMachine::startMission)
+            coordinator.update(first.id) { run, now -> WakeMachine.progress(run, run.version, now) }
+            assertEquals(RunState.COMPLETED, runs().first { it.id == first.id }.state)
+            assertEquals(if (cancelBackups) RunState.MISSED else RunState.SCHEDULED,
+                runs().first { it.id == backup.id }.state)
+        }
+    }
+
     @Test fun expiryAndEmergencyDoNotCancelBackups() = runBlocking {
         monday(5)
         val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })

@@ -59,6 +59,7 @@ fun GroupHeader(
 fun GroupSettingsDialog(
     group: AlarmGroup?, title: String, plans: List<AlarmPlan>, profiles: Map<String, PrivateAlarm>, busy: Boolean,
     onClose: () -> Unit, onSave: (String, Boolean) -> Unit, onRemove: (String) -> Unit,
+    onSkip: () -> Unit, onUndoSkip: () -> Unit,
 ) {
     var name by rememberSaveable(group?.id) { mutableStateOf(title) }
     var smart by rememberSaveable(group?.id) { mutableStateOf(group?.cancelBackups ?: false) }
@@ -74,6 +75,8 @@ fun GroupSettingsDialog(
                         style = MaterialTheme.typography.bodySmall)
                     Text("Следующий звонок группы может заменить прежнее задание и проверку. Отложенные вручную сигналы сохраняются.",
                         style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = onSkip, enabled = !busy) { Text("Пропустить завтра") }
+                    TextButton(onClick = onUndoSkip, enabled = !busy) { Text("Отменить завтрашний пропуск") }
                     plans.sortedWith(compareBy({ it.hour }, { it.minute })).forEach { plan ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("%02d:%02d · %s".format(plan.hour, plan.minute, profiles[plan.privateKey]?.title ?: "Будильник"),
