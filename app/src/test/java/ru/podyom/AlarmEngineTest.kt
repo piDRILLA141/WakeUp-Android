@@ -387,6 +387,30 @@ class AlarmEngineTest {
         assertEquals(backup.eventAt, runs().single { it.plan.id == "backup" && it.state == RunState.SCHEDULED }.eventAt)
     }
 
+    @Test fun groupSubstitutesItsOwnCheckButKeepsSnoozeAndOtherGroups() = runBlocking {
+        monday(5)
+        val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })
+        val group = coordinator.createGroup("Утро")
+        val other = coordinator.createGroup("Другой график")
+        val at = clock + 10_000
+        val base = daily("new").copy(groupId = group.id)
+        val checking = AlarmRun("checking", base.copy(id = "check"), at - 1_800_000, state = RunState.WAKE_CHECK_ACTIVE,
+            deadline = at + 120_000, eventAt = at + 120_000, firedAt = at - 1_800_000)
+        val snoozed = checking.copy(id = "snoozed", plan = base.copy(id = "snooze"), state = RunState.SNOOZED, snoozes = 1)
+        val unrelated = checking.copy(id = "other", plan = base.copy(id = "other", groupId = other.id))
+        listOf(checking, snoozed, unrelated).forEach { app.runtime.dao().putRun(it.row()); app.scheduler.schedule(it) }
+        coordinator.save(base, PrivateAlarm(), at)
+        val next = runs().single { it.state == RunState.SCHEDULED }
+        clock = at
+        coordinator.event(next.id, next.version)
+        assertEquals(CheckConfirmation.EXPIRED, coordinator.confirmWake(checking.checkKey))
+        assertEquals(RunState.SNOOZED, runs().first { it.id == snoozed.id }.state)
+        assertEquals(RunState.WAKE_CHECK_ACTIVE, runs().first { it.id == unrelated.id }.state)
+        assertEquals(RunState.RINGING, runs().first { it.id == next.id }.state)
+        val following = runs().single { it.state == RunState.SCHEDULED }
+        assertEquals("new", following.plan.id)
+    }
+
     @Test fun expiryAndEmergencyDoNotCancelBackups() = runBlocking {
         monday(5)
         val coordinator = AlarmEngine(app, clock = { clock }, zoneId = { testZone })
@@ -416,14 +440,18 @@ class AlarmEngineTest {
         val group = coordinator.createGroup("Утро")
         coordinator.save(daily("daily").copy(groupId = group.id), PrivateAlarm())
         coordinator.save(daily("weekly").copy(groupId = group.id, days = setOf(day.dayOfWeek.value)), PrivateAlarm())
+        coordinator.save(daily("manual").copy(groupId = group.id), PrivateAlarm())
+        coordinator.skipTomorrow(setOf("manual"), allowOneShot = false)
         val weekly = runs().first { it.plan.id == "weekly" }
         val result = coordinator.skipTomorrow(emptySet(), allowOneShot = false, groupId = group.id)
         assertEquals(1, result.changed)
         assertEquals(1, result.notScheduled)
+        assertEquals(1, result.alreadySkipped)
         assertEquals(instant(day.plusDays(2), 6), runs().single { it.plan.id == "daily" }.eventAt)
         assertEquals(weekly.id, runs().single { it.plan.id == "weekly" }.id)
         assertEquals(1, coordinator.undoGroupSkip(group.id))
         assertEquals(instant(day.plusDays(1), 6), runs().single { it.plan.id == "daily" }.eventAt)
+        assertEquals(instant(day.plusDays(2), 6), runs().single { it.plan.id == "manual" }.eventAt)
     }
 
     @Test fun laterRingsPreemptAndEndingQueueLeavesFutureAlarmsAndWakeChecks() = runBlocking {

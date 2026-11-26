@@ -43,6 +43,7 @@ import kotlinx.serialization.Serializable
     val skipEpochDays: Set<Long> = emptySet(),
     val lastFiredEpochDay: Long? = null,
     val automaticSkipDay: Long? = null,
+    val groupSkipDays: Map<Long, String> = emptyMap(),
     val independent: Boolean = false,
     val groupId: String? = null,
 ) {

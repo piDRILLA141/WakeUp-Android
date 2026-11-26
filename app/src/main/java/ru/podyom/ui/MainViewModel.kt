@@ -194,7 +194,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else emptyMap()
         backup.alarms.forEach {
             app.engine.save(it.plan.copy(id = UUID.randomUUID().toString(), enabled = false,
-                lastFiredEpochDay = null, groupId = if (it.plan.quick) null else imported[it.plan.groupId]),
+                lastFiredEpochDay = null, groupSkipDays = it.plan.groupSkipDays.mapNotNull { (day, source) ->
+                    imported[source]?.let { groupId -> day to groupId }
+                }.toMap(), groupId = if (it.plan.quick) null else imported[it.plan.groupId]),
                 it.profile.copy(soundUri = ""))
         }
         app.settings.deduplicate(backup.settings.deduplicate)
