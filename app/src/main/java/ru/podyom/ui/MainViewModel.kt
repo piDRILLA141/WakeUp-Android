@@ -16,10 +16,14 @@ import ru.podyom.ringing.RingingService
 import java.util.UUID
 
 @Serializable data class BackupAlarm(val plan: AlarmPlan, val profile: PrivateAlarm)
-@Serializable data class Backup(val version: Int = 1, val alarms: List<BackupAlarm>, val settings: AppSettings = AppSettings())
+@Serializable data class BackupGroup(val group: AlarmGroup, val name: String)
+@Serializable data class Backup(val version: Int = 2, val alarms: List<BackupAlarm>,
+    val settings: AppSettings = AppSettings(), val groups: List<BackupGroup> = emptyList())
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as App
     val alarms = app.runtime.dao().observeAlarms().map { list -> list.map { it.model() } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val groups = app.runtime.dao().observeGroups().map { rows -> rows.map { it.model() } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val rows = app.runtime.dao().observeRuns().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val runs = rows.map { list -> list.map { it.model() } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val profiles = app.privateDb.dao().profiles().map { rows -> rows.associate { it.id to codec.decodeFromString<PrivateAlarm>(it.json) } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
@@ -59,20 +63,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun skipTomorrow(ids: Set<String>, allowOneShot: Boolean) = scheduleAction {
-        val result = app.engine.skipTomorrow(ids, allowOneShot)
+    fun skipTomorrow(ids: Set<String>, allowOneShot: Boolean, groupId: String? = null) = scheduleAction {
+        val result = app.engine.skipTomorrow(ids, allowOneShot, groupId)
         val message = buildList {
             if (result.changed > 0) add("Пропущено на завтра: ${result.changed}. Остальное расписание сохранено.")
             if (result.notScheduled > 0) add("Без звонка на завтра или выключены: ${result.notScheduled}.")
             if (result.alreadySkipped > 0) add("Уже пропущены: ${result.alreadySkipped}.")
         }.joinToString(" ")
-        messages.emit(message)
+        messages.emit(message.ifBlank { "У группы нет будильников на завтра." })
         scheduleCompleted.value++
     }
 
     fun undoSkip(id: String, day: Long) = scheduleAction {
         app.engine.undoSkip(id, day)
         messages.emit("Пропуск отменён. Расписание обновлено.")
+    }
+
+    fun createGroup(name: String, ids: Set<String>, done: () -> Unit) = scheduleAction {
+        app.engine.createGroup(name, ids)
+        done()
+    }
+
+    fun editGroup(id: String, name: String, cancelBackups: Boolean, done: () -> Unit) = scheduleAction {
+        app.engine.editGroup(id, name, cancelBackups)
+        done()
+    }
+
+    fun groupEnabled(id: String, enabled: Boolean) = scheduleAction { app.engine.setGroupEnabled(id, enabled) }
+    fun removeGroup(id: String, deleteAlarms: Boolean) = scheduleAction { app.engine.removeGroup(id, deleteAlarms) }
+    fun moveToGroup(ids: Set<String>, groupId: String?, done: () -> Unit) = scheduleAction {
+        app.engine.moveAlarms(ids, groupId)
+        done()
+    }
+
+    fun undoGroupSkip(id: String) = scheduleAction {
+        val count = app.engine.undoGroupSkip(id)
+        messages.emit(if (count == 0) "У группы нет пропуска на завтра." else "Восстановлено расписаний: $count.")
+    }
+
+    fun restoreBackup(id: String) = scheduleAction {
+        app.engine.restoreBackup(id)
+        messages.emit("Резервный сигнал восстановлен")
     }
 
     fun disableSelected(ids: Set<String>) = scheduleAction {
@@ -103,7 +134,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         action {
             try {
                 messages.emit(when (app.engine.confirmWake(key, answer)) {
-                    CheckConfirmation.ACCEPTED, CheckConfirmation.ALREADY_CONFIRMED -> "Пробуждение подтверждено"
+                    CheckConfirmation.ACCEPTED, CheckConfirmation.ALREADY_CONFIRMED ->
+                        ru.podyom.wakecheck.wakeConfirmedText(app.engine.cancelledBackups(key.runId))
                     CheckConfirmation.WRONG_ANSWER -> "Проверьте ответ"
                     CheckConfirmation.EXPIRED -> "Время подтверждения истекло"
                     else -> "Эта проверка уже изменилась"
@@ -138,7 +170,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun clearHistory() = action { app.engine.clearHistory(); app.privateDb.dao().clearSleep() }
     fun export(uri: Uri) = action {
         val entries = app.runtime.dao().alarms().map { row -> val p = row.model(); BackupAlarm(p, app.engine.profile(p.privateKey) ?: PrivateAlarm()) }
-        withContext(Dispatchers.IO) { app.contentResolver.openOutputStream(uri, "wt")!!.bufferedWriter().use { it.write(codec.encodeToString(Backup(alarms = entries, settings = app.settings.flow.first()))) } }
+        val groupEntries = app.runtime.dao().observeGroups().first().map { row ->
+            BackupGroup(row.model(), app.engine.profile(row.id)?.title ?: "Группа")
+        }
+        val backup = Backup(alarms = entries, settings = app.settings.flow.first(), groups = groupEntries)
+        withContext(Dispatchers.IO) { app.contentResolver.openOutputStream(uri, "wt")!!.bufferedWriter().use { it.write(codec.encodeToString(backup)) } }
         messages.emit("Будильники экспортированы. Файл содержит ваши фразы и QR-коды")
     }
     fun import(uri: Uri) = action {
@@ -149,9 +185,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             output.toByteArray().decodeToString()
         } }
         val backup = codec.decodeFromString<Backup>(text)
-        require(backup.version == 1 && backup.alarms.size <= 500) { "Неподдерживаемый формат" }
+        require(backup.version in 1..2 && backup.alarms.size <= 500 && backup.groups.size <= 500) { "Неподдерживаемый формат" }
         backup.alarms.forEach { it.plan.validate(); require(it.profile.phrase.length in 1..500 && it.profile.title.length <= 100 && it.profile.qr.length <= 4096); require(it.plan.missions.none { m -> m.kind == MissionKind.QR } || it.profile.qr.isNotEmpty()) }
-        backup.alarms.forEach { app.engine.save(it.plan.copy(id = UUID.randomUUID().toString(), enabled = false, lastFiredEpochDay = null), it.profile.copy(soundUri = "")) }
+        require(backup.groups.all { it.name.trim().length in 1..60 } &&
+            backup.groups.map { it.group.id }.distinct().size == backup.groups.size) { "Некорректные группы" }
+        val imported = if (backup.version >= 2) backup.groups.associate { (group, name) ->
+            group.id to app.engine.createGroup(name, enabled = group.enabled, cancelBackups = group.cancelBackups).id
+        } else emptyMap()
+        backup.alarms.forEach {
+            app.engine.save(it.plan.copy(id = UUID.randomUUID().toString(), enabled = false,
+                lastFiredEpochDay = null, groupId = if (it.plan.quick) null else imported[it.plan.groupId]),
+                it.profile.copy(soundUri = ""))
+        }
+        app.settings.deduplicate(backup.settings.deduplicate)
         app.settings.light(backup.settings.light); app.settings.clock24(backup.settings.clock24); app.settings.enhanced(backup.settings.enhancedCheck)
         messages.emit("Импортировано ${backup.alarms.size}. Включите нужные будильники; мелодии выберите заново")
     }

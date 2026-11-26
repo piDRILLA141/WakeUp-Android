@@ -58,7 +58,7 @@ class WakeCheckOverlay(private val context:Context,private val scope:CoroutineSc
                     try {
                         when (context.app.engine.confirmWake(run.checkKey)) {
                             CheckConfirmation.ACCEPTED, CheckConfirmation.ALREADY_CONFIRMED -> {
-                                Toast.makeText(context, "Пробуждение подтверждено", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, ru.podyom.wakecheck.wakeConfirmedText(context.app.engine.cancelledBackups(run.id)), Toast.LENGTH_SHORT).show()
                                 if (shownRun?.checkKey == run.checkKey) close()
                             }
                             else -> countdown.text = "Проверка уже изменилась"

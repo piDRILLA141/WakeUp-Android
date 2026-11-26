@@ -25,7 +25,7 @@ class AlarmReceiver : BroadcastReceiver() {
                     if (cycle >= 0 && index >= 0) {
                         val result = engine.confirmWake(CheckKey(id, cycle, index))
                         if (result in setOf(CheckConfirmation.ACCEPTED, CheckConfirmation.ALREADY_CONFIRMED)) {
-                            Toast.makeText(context, "Пробуждение подтверждено", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, ru.podyom.wakecheck.wakeConfirmedText(engine.cancelledBackups(id)), Toast.LENGTH_SHORT).show()
                         }
                     } else {
                         engine.confirmCheck(id, expectedVersion = intent.getIntExtra("version", -1))

@@ -35,6 +35,12 @@ import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable fun HomeScreen(vm: MainViewModel) {
+    val groups by vm.groups.collectAsStateWithLifecycle()
+    var groupDialog by rememberSaveable { mutableStateOf<String?>(null) }
+    var moveTo by rememberSaveable { mutableStateOf<String?>(null) }
+    var addingMembers by rememberSaveable { mutableStateOf<String?>(null) }
+    var skipGroup by rememberSaveable { mutableStateOf<String?>(null) }
+    var expandedGroups by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     val alarms by vm.alarms.collectAsStateWithLifecycle(); val runs by vm.runs.collectAsStateWithLifecycle()
     val rows by vm.rows.collectAsStateWithLifecycle(); val profiles by vm.profiles.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle(); val nights by vm.sleep.collectAsStateWithLifecycle()
@@ -54,6 +60,7 @@ import java.util.UUID
             acknowledged = completed
             scheduleOption = ""
             scheduleIds = arrayListOf()
+            skipGroup = null
             selectedIds = arrayListOf()
         }
     }
@@ -62,7 +69,8 @@ import java.util.UUID
     fun select(id: String) {
         if (!busy) selectedIds = ArrayList(if (id in selectedIds) selectedIds - id else selectedIds + id)
     }
-    fun openSchedule(ids: Collection<String>, option: String) {
+    fun openSchedule(ids: Collection<String>, option: String, groupId: String? = null) {
+        skipGroup = groupId
         scheduleIds = ArrayList(ids)
         scheduleOption = option
     }
@@ -116,6 +124,14 @@ import java.util.UUID
                         Text(nearest?.let { "Следующий будильник через ${duration(it.eventAt - calendarNow.longValue)}" } ?: "Время для нового утра", style = MaterialTheme.typography.bodyLarge)
                     }
                     if (selecting) item {
+                        if (alarms.any { it.id in selectedIds && !it.quick }) {
+                            Button(onClick = { groupDialog = "new" }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                                Text("Объединить в группу")
+                            }
+                            if (groups.isNotEmpty()) OutlinedButton(onClick = { moveTo = "" }, enabled = !busy) {
+                                Text("Переместить в группу")
+                            }
+                        }
                         Button(onClick = { openSchedule(selectedIds, "skip") }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                             Text("Пропустить завтра")
                         }
@@ -158,9 +174,13 @@ import java.util.UUID
                         }
                     }
                     if (alarms.isEmpty()) item { Card { Column(Modifier.padding(24.dp)) { Icon(Icons.Outlined.WbTwilight, null, Modifier.size(48.dp)); Spacer(Modifier.height(16.dp)); Text("Утро начинается здесь", style = MaterialTheme.typography.titleLarge); Text("Создайте первый будильник. Задание поможет встать, а проверка напомнит не возвращаться в постель.") } } }
-                    items(alarms.sortedBy { p -> runs.firstOrNull { it.plan.id == p.id && it.state == RunState.SCHEDULED }?.eventAt ?: Long.MAX_VALUE }, key = { it.id }) { alarm ->
+                    val scheduled = runs.filter { it.state == RunState.SCHEDULED }.associateBy { it.plan.id }
+                    val ordered = alarms.sortedBy { scheduled[it.id]?.eventAt ?: Long.MAX_VALUE }
+                    val members = ordered.groupBy { it.groupId }
+                    fun androidx.compose.foundation.lazy.LazyListScope.alarmItems(plans: List<AlarmPlan>) {
+                        items(plans, key = { it.id }) { alarm ->
                         val profile = profiles[alarm.privateKey] ?: PrivateAlarm()
-                        val next = runs.firstOrNull { it.plan.id == alarm.id && it.state == RunState.SCHEDULED }
+                        val next = scheduled[alarm.id]
                         val today = Instant.ofEpochMilli(calendarNow.longValue).atZone(ZoneId.systemDefault()).toLocalDate()
                         AlarmCard(alarm, profile, settings.clock24, next, today, selecting, alarm.id in selectedIds,
                             edit = { if (selecting) select(alarm.id) else editor = alarm.id },
@@ -168,7 +188,31 @@ import java.util.UUID
                                 if (enabled) vm.enabled(alarm.id, true) else openSchedule(listOf(alarm.id), "choose")
                             }, duplicate = { vm.duplicate(alarm, profile) },
                             undoSkip = { day -> vm.undoSkip(alarm.id, day) },
-                            delete = { confirm = "Удалить «${profile.title}» вместе с его активными проверками?" to { vm.delete(alarm.id) } })
+                            delete = { confirm = "Удалить «${profile.title}» вместе с его активными проверками?" to { vm.delete(alarm.id) } },
+                            move = if (!alarm.quick && groups.isNotEmpty()) ({ moveTo = alarm.id }) else null,
+                            restoreBackup = { vm.restoreBackup(alarm.id) })
+                        }
+                    }
+                    alarmItems(members[null].orEmpty())
+                    groups.sortedBy { profiles[it.id]?.title }.forEach { group ->
+                        val plans = members[group.id].orEmpty()
+                        val opened = group.id in expandedGroups
+                        item(key = "group-${group.id}") {
+                            GroupHeader(group, profiles[group.id]?.title ?: "Группа", plans, opened || selecting,
+                                busy || selecting,
+                                onExpand = { expandedGroups = ArrayList(if (opened) expandedGroups - group.id else expandedGroups + group.id) },
+                                enabled = { vm.groupEnabled(group.id, it) },
+                                manage = { groupDialog = group.id },
+                                createAlarm = { editor = "new:${group.id}" },
+                                addMembers = { addingMembers = group.id },
+                                skip = { openSchedule(plans.map { it.id }, "skip", group.id) },
+                                restore = { vm.undoGroupSkip(group.id) },
+                                remove = { deleteAlarms ->
+                                    val text = if (deleteAlarms) "Удалить группу и все её будильники?" else "Удалить группу? Её будильники станут отдельными."
+                                    confirm = text to { vm.removeGroup(group.id, deleteAlarms) }
+                                })
+                        }
+                        if (opened || selecting) alarmItems(plans)
                     }
                     item { Spacer(Modifier.height(76.dp)) }
                 }
@@ -184,7 +228,7 @@ import java.util.UUID
                     item { Text("Твои пробуждения", style = MaterialTheme.typography.headlineLarge); Text("Статистика взаимодействий, а не оценка физиологического бодрствования.") }
                     item { var days by rememberSaveable { mutableIntStateOf(7) }; Row { listOf(7,30).forEach { n -> FilterChip(selected = days == n, onClick = { days=n }, label = { Text("$n дней") }, modifier = Modifier.padding(end=8.dp)) } }; val recent = runs.filter { it.firedAt >= calendarNow.longValue - days*86400000L && it.firedAt > 0 }; StatsCard(recent); MiniBars((days-1 downTo 0).map { back -> val d = LocalDate.now().minusDays(back.toLong()); recent.count { Instant.ofEpochMilli(it.firedAt).atZone(ZoneId.systemDefault()).toLocalDate() == d }.toFloat() }) }
                     item { ru.podyom.statistics.WakeCalendar(runs) }
-                    items(runs.filter { it.firedAt > 0 || it.state in setOf(RunState.CANCELLED, RunState.MISSED) }.sortedByDescending { it.updatedAt }.take(50), key={it.id}) { r -> Card { Column(Modifier.fillMaxWidth().padding(16.dp)) { Text(date(r.updatedAt)); Text(if (r.disposition == "superseded") "Пропущен — заменён следующим будильником" else stateLabel(r.state)); Text("Повторы: ${r.cycle} · Отложено: ${r.snoozes} · Без ответа: ${r.missedChecks}", style = MaterialTheme.typography.bodySmall); if(r.emergency) Text("Аварийное завершение", color = MaterialTheme.colorScheme.tertiary) } } }
+                    items(runs.filter { it.firedAt > 0 || it.state in setOf(RunState.CANCELLED, RunState.MISSED) }.sortedByDescending { it.updatedAt }.take(50), key={it.id}) { r -> Card { Column(Modifier.fillMaxWidth().padding(16.dp)) { Text(date(r.updatedAt)); Text(when (r.disposition) { "superseded" -> "Пропущен — заменён следующим будильником"; "backup" -> "Пропущен автоматически — пробуждение уже подтверждено"; else -> stateLabel(r.state) }); Text("Повторы: ${r.cycle} · Отложено: ${r.snoozes} · Без ответа: ${r.missedChecks}", style = MaterialTheme.typography.bodySmall); if(r.emergency) Text("Аварийное завершение", color = MaterialTheme.colorScheme.tertiary) } } }
                 }
                 3 -> {
                     item { Text("Как тебе удобно", style = MaterialTheme.typography.headlineLarge) }
@@ -237,7 +281,7 @@ import java.util.UUID
             oneShot -> "Пропуск одноразового будильника отменит его единственное срабатывание. Пропуск можно отменить до этого времени."
             else -> "Завтрашние сигналы будут пропущены. Срабатывания на другие даты сохранятся."
         }
-        fun closeSchedule() { scheduleOption = ""; scheduleIds = arrayListOf() }
+        fun closeSchedule() { scheduleOption = ""; scheduleIds = arrayListOf(); skipGroup = null }
         AlertDialog(
             onDismissRequest = { if (!busy) closeSchedule() },
             title = { Text(if (scheduleOption == "choose") "Что сделать с будильником?" else "Выбранные будильники: ${scheduleIds.size}") },
@@ -245,7 +289,7 @@ import java.util.UUID
                 Column {
                     Text(explanation)
                     if (scheduleOption != "disable") {
-                        TextButton(onClick = { vm.skipTomorrow(scheduleIds.toSet(), oneShot) },
+                        TextButton(onClick = { vm.skipTomorrow(scheduleIds.toSet(), oneShot, skipGroup) },
                             enabled = !busy && eligible.isNotEmpty()) { Text("Пропустить завтра") }
                     }
                     if (scheduleOption != "skip") {
@@ -258,10 +302,34 @@ import java.util.UUID
             confirmButton = { TextButton(onClick = ::closeSchedule, enabled = !busy) { Text("Отмена") } },
         )
     }
+    groupDialog?.let { id ->
+        val group = groups.firstOrNull { it.id == id }
+        if (id == "new" || group != null) GroupSettingsDialog(group, profiles[id]?.title.orEmpty(),
+            alarms.filter { it.groupId == id }, profiles, busy, onClose = { groupDialog = null },
+            onSave = { name, cancelBackups ->
+                if (group == null) vm.createGroup(name, selectedIds.toSet()) {
+                    groupDialog = null
+                    selectedIds = arrayListOf()
+                } else vm.editGroup(id, name, cancelBackups) { groupDialog = null }
+            },
+            onRemove = { alarmId -> vm.moveToGroup(setOf(alarmId), null) {} })
+    }
+    addingMembers?.let { id ->
+        AddGroupAlarmsDialog(alarms.filter { !it.quick && it.groupId != id }, profiles, busy,
+            onClose = { addingMembers = null },
+            onApply = { ids -> vm.moveToGroup(ids, id) { addingMembers = null } })
+    }
+    moveTo?.let { itemId ->
+        val ids = if (itemId.isEmpty()) selectedIds.toSet() else setOf(itemId)
+        MoveGroupDialog(groups, profiles, busy, onClose = { moveTo = null },
+            onApply = { groupId -> vm.moveToGroup(ids, groupId) { moveTo = null; selectedIds = arrayListOf() } })
+    }
     editor?.let { key ->
         val original = alarms.find { it.id == key }
         // Stable draft identity: the one-second countdown must never reset a new editor.
-        val initialPlan = remember(key) { original ?: AlarmPlan(UUID.randomUUID().toString()) }
+        val initialPlan = remember(key) {
+            original ?: AlarmPlan(UUID.randomUUID().toString(), groupId = key.substringAfter("new:", "").ifBlank { null })
+        }
         val initialProfile = remember(key) { original?.let { profiles[it.privateKey] } ?: PrivateAlarm() }
         AlarmEditor(initialPlan, initialProfile, onClose = { editor = null }, onSave = { p, private -> vm.save(p, private) { editor = null } })
     }
@@ -278,9 +346,13 @@ private fun AlarmCard(
     plan: AlarmPlan, profile: PrivateAlarm, clock24: Boolean, next: AlarmRun?, today: LocalDate,
     selecting: Boolean, selected: Boolean, edit: () -> Unit, longPress: () -> Unit,
     toggle: (Boolean) -> Unit, duplicate: () -> Unit, undoSkip: (Long) -> Unit, delete: () -> Unit,
+    move: (() -> Unit)?, restoreBackup: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
     val skipDates = plan.skipEpochDays.map(LocalDate::ofEpochDay).filter { plan.days.isEmpty() || it >= today }.sorted()
+    val autoSkipToday = plan.automaticSkipDay == today.toEpochDay()
+    val autoTime = plan.oneShotAt ?: today.atTime(plan.hour, plan.minute).atZone(ZoneId.systemDefault())
+        .withEarlierOffsetAtOverlap().toInstant().toEpochMilli()
     val formatter = DateTimeFormatter.ofPattern("d MMMM", java.util.Locale.forLanguageTag("ru"))
     Card(
         modifier = Modifier.fillMaxWidth().combinedClickable(onClick = edit, onLongClick = longPress, onLongClickLabel = "Выбрать будильник"),
@@ -308,6 +380,7 @@ private fun AlarmCard(
                     "Пропуск: " + skipDate.format(formatter),
                     color = MaterialTheme.colorScheme.primary)
             }
+            if (autoSkipToday) Text("Резервный сигнал на сегодня отменён", color = MaterialTheme.colorScheme.primary)
             if (next != null) Text("Следующий звонок · ${date(next.eventAt)}", style = MaterialTheme.typography.bodySmall)
             else if (skipDates.isNotEmpty() && plan.days.isEmpty()) Text("Единственное срабатывание пропущено", style = MaterialTheme.typography.bodySmall)
             Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
@@ -321,6 +394,10 @@ private fun AlarmCard(
                         skipDates.forEach { day ->
                             DropdownMenuItem(text = { Text(if (skipDates.size == 1) "Отменить пропуск" else "Отменить пропуск · ${day.format(formatter)}") },
                                 onClick = { menu = false; undoSkip(day.toEpochDay()) })
+                        }
+                        if (move != null) DropdownMenuItem(text = { Text("Переместить в группу") }, onClick = { menu = false; move() })
+                        if (autoSkipToday && autoTime > System.currentTimeMillis()) {
+                            DropdownMenuItem(text = { Text("Восстановить резервный сигнал") }, onClick = { menu = false; restoreBackup() })
                         }
                         DropdownMenuItem(text = { Text("Удалить") }, onClick = { menu = false; delete() })
                     }

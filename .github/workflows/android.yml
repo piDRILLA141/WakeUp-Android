@@ -1,5 +1,13 @@
 name: Android
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      require_persistent_signing:
+        description: 'Require a configured persistent signing key'
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
@@ -46,18 +54,31 @@ jobs:
       - name: Restore optional persistent signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.PODYOM_KEYSTORE_BASE64 }}
+          REQUIRE_PERSISTENT_SIGNING: ${{ inputs.require_persistent_signing }}
+          KEYSTORE_PASSWORD: ${{ secrets.PODYOM_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.PODYOM_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.PODYOM_KEY_PASSWORD }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
+            if [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+              echo "::error::The persistent signing key is missing its password or alias configuration."
+              exit 1
+            fi
             printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/podyom-signing.keystore"
             chmod 600 "$RUNNER_TEMP/podyom-signing.keystore"
             echo "PODYOM_KEYSTORE_PATH=$RUNNER_TEMP/podyom-signing.keystore" >> "$GITHUB_ENV"
+          elif [ "$REQUIRE_PERSISTENT_SIGNING" = true ]; then
+            echo "::error::A persistent signing key is required for this run."
+            exit 1
+          else
+            echo "::notice::No persistent key is configured. This APK uses a disposable test certificate."
           fi
-      - name: Download published 0.3.0 APK for certificate comparison
+      - name: Download published 0.4.0 APK for certificate comparison
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: podyom-debug-apk
-          run-id: 45168411155
+          run-id: 45711080102
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/podyom/previous
       - name: Cache Robolectric Android 16 runtime
@@ -95,9 +116,9 @@ jobs:
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk dist/podyom-debug.apk
           ./scripts/signing-report.sh dist/podyom-debug.apk "$RUNNER_TEMP/podyom/signing" "$RUNNER_TEMP/podyom/previous/podyom-debug.apk"
-          cp docs/STABILIZATION_0.4.0.md "$RUNNER_TEMP/podyom/signing/"
+          cp docs/SMART_ALARMS_0.5.0.md "$RUNNER_TEMP/podyom/signing/"
           cp "$RUNNER_TEMP/podyom/signing/SIGNING.md" dist/
-          cp docs/STABILIZATION_0.4.0.md dist/
+          cp docs/SMART_ALARMS_0.5.0.md dist/
           cd dist
           sha256sum podyom-debug.apk > SHA256SUMS
       - name: Upload installable debug APK
@@ -166,6 +187,10 @@ jobs:
           EMULATOR_OUTCOME: ${{ steps.instrumentation.outcome }}
         run: |
           python3 scripts/package-check-results.py "$RUNNER_TEMP/podyom/results" --build-outcome "$BUILD_OUTCOME" --build-log "$RUNNER_TEMP/podyom-build.log" --emulator-outcome "$EMULATOR_OUTCOME"
+          if [ -f app/schemas/ru.podyom.data.RuntimeDatabase/3.json ]; then
+            cp -r app/schemas "$RUNNER_TEMP/podyom/results/"
+            python3 -c 'import json; print("Room 3 identity: " + json.load(open("app/schemas/ru.podyom.data.RuntimeDatabase/3.json"))["database"]["identityHash"])'
+          fi
           if [ -f "$RUNNER_TEMP/podyom-emulator.log" ]; then
             cp "$RUNNER_TEMP/podyom-emulator.log" "$RUNNER_TEMP/podyom/results/"
           fi

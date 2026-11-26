@@ -71,7 +71,7 @@ import java.time.format.DateTimeFormatter
                     if (message.isNotBlank()) Text(message)
                 }
                 CheckPage.LOADING -> Text("Загрузка проверки…")
-                CheckPage.CONFIRMED -> Text("Пробуждение подтверждено", style = MaterialTheme.typography.headlineMedium)
+                CheckPage.CONFIRMED -> Text(ru.podyom.wakecheck.wakeConfirmedText(run?.cancelledBackups ?: 0), style = MaterialTheme.typography.headlineMedium)
                 CheckPage.EXPIRED -> Text("Время подтверждения истекло")
                 CheckPage.RE_RING -> {
                     Text("Время проверки истекло. Будильник звонит снова.")
@@ -109,7 +109,7 @@ import java.time.format.DateTimeFormatter
                 ru.podyom.wakecheck.WakeCheckPanel(run,{answer->vm.confirm(run.checkKey,answer)},{emergency=true}, busy = confirming == run.checkKey)
             }
             RunState.SNOOZED -> {Text("Сигнал отложен на ${duration(run.eventAt-now)}");OutlinedButton(onClick=onClose){Text("Закрыть экран")}}
-            RunState.COMPLETED,RunState.CANCELLED -> {Text(if(run.state==RunState.COMPLETED) "Хорошего тебе дня" else "Этот звонок завершён",style=MaterialTheme.typography.headlineLarge);Text("Следующее регулярное срабатывание остаётся в расписании.");Button(onClick=onClose){Text("Готово")}}
+            RunState.COMPLETED,RunState.CANCELLED -> {Text(if(run.state==RunState.COMPLETED) "Хорошего тебе дня" else "Этот звонок завершён",style=MaterialTheme.typography.headlineLarge);if (run.cancelledBackups > 0) Text(ru.podyom.wakecheck.wakeConfirmedText(run.cancelledBackups)); Text("Следующее регулярное срабатывание остаётся в расписании.");Button(onClick=onClose){Text("Готово")}}
             RunState.MISSED -> { Text("Будильник пропущен"); Button(onClick=onClose) { Text("Закрыть экран") } }
             RunState.SCHEDULED -> Text("Будильник запланирован на ${date(run.eventAt)}")
         }

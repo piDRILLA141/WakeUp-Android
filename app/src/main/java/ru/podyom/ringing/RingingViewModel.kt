@@ -33,7 +33,8 @@ class RingingViewModel(application: Application):AndroidViewModel(application) {
         action {
             try {
                 message.value = when (app.engine.confirmWake(key, answer)) {
-                    CheckConfirmation.ACCEPTED, CheckConfirmation.ALREADY_CONFIRMED -> "Пробуждение подтверждено"
+                    CheckConfirmation.ACCEPTED, CheckConfirmation.ALREADY_CONFIRMED ->
+                        ru.podyom.wakecheck.wakeConfirmedText(app.engine.cancelledBackups(key.runId))
                     CheckConfirmation.WRONG_ANSWER -> "Проверьте ответ"
                     CheckConfirmation.EXPIRED -> "Время подтверждения истекло"
                     else -> "Эта проверка уже изменилась"
