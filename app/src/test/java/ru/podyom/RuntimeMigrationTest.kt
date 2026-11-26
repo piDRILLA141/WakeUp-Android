@@ -31,7 +31,7 @@ class RuntimeMigrationTest {
             override fun onUpgrade(db:SupportSQLiteDatabase,oldVersion:Int,newVersion:Int) {}
         }).build())
         helper.writableDatabase;helper.close()
-        val migrated=Room.databaseBuilder(context,RuntimeDatabase::class.java,name).addMigrations(RuntimeDatabase.MIGRATION_1_2).build()
+        val migrated=Room.databaseBuilder(context,RuntimeDatabase::class.java,name).addMigrations(RuntimeDatabase.MIGRATION_1_2, RuntimeDatabase.MIGRATION_2_3).build()
         try {val row=migrated.dao().run("r")!!;assertEquals("WAITING_WAKE_CHECK",row.state);assertEquals(12345L,row.eventAt);assertEquals("",row.diagnostic)} finally {migrated.close()}
     }
 }

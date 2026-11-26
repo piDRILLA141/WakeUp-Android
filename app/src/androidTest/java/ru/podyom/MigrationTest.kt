@@ -20,13 +20,14 @@ class MigrationTest {
             execSQL("INSERT INTO runs(id,alarmId,state,eventAt,json) VALUES ('run','alarm','WAKE_CHECK_ACTIVE',12345,'{}')")
             close()
         }
-        androidx.room.Room.databaseBuilder(context, RuntimeDatabase::class.java, name)
-            .addMigrations(RuntimeDatabase.MIGRATION_2_3).allowMainThreadQueries().build().use { room ->
+        val room = androidx.room.Room.databaseBuilder(context, RuntimeDatabase::class.java, name)
+            .addMigrations(RuntimeDatabase.MIGRATION_2_3).allowMainThreadQueries().build()
+        try {
                 val db = room.openHelper.writableDatabase
                 db.query("SELECT id FROM alarms").use { assertTrue(it.moveToFirst()); assertEquals("alarm", it.getString(0)) }
                 db.query("SELECT state FROM runs").use { assertTrue(it.moveToFirst()); assertEquals("WAKE_CHECK_ACTIVE", it.getString(0)) }
                 db.query("SELECT COUNT(*) FROM alarm_groups").use { assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0)) }
-            }
+            } finally { room.close() }
     }
 
     @Test fun versionOneRunSurvivesUpgrade() {
