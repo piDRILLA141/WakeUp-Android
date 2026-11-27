@@ -47,6 +47,21 @@ class EditorTest {
         compose.runOnIdle { assertEquals(8, saved?.hour); assertEquals(45, saved?.minute) }
     }
 
+    @Test fun practiceOpensInTheEditorAndClosesWithoutSavingAnAlarm() {
+        var saved = false
+        compose.setContent {
+            PodyomTheme {
+                AlarmEditor(AlarmPlan("practice-editor"), PrivateAlarm(), {}, { _, _ -> saved = true })
+            }
+        }
+        compose.onNodeWithTag("editor-content").performScrollToNode(hasText("Попробовать задание"))
+        compose.onNodeWithText("Попробовать задание").performScrollTo().performClick()
+        compose.onNodeWithText("Пробное задание · Математика").assertIsDisplayed()
+        compose.onNodeWithText("Закрыть пробу").performScrollTo().performClick()
+        compose.onNodeWithText("Сохранить будильник").assertExists()
+        compose.runOnIdle { assertFalse(saved) }
+    }
+
     @Test fun closingEditorDoesNotCreateAlarm() {
         var saved=false;var closed=false
         compose.setContent { PodyomTheme { AlarmEditor(AlarmPlan("test"),PrivateAlarm(),{closed=true},{_,_->saved=true}) } }

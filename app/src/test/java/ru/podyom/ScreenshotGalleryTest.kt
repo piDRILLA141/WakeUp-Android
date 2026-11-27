@@ -4,6 +4,9 @@ import android.Manifest
 import android.os.UserManager
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
@@ -23,7 +26,7 @@ import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowAlarmManager
 import org.robolectric.shadows.ShadowDialog
 import ru.podyom.core.*
-import ru.podyom.missions.PracticeMission
+import ru.podyom.missions.PracticePanel
 import ru.podyom.ui.*
 
 @RunWith(RobolectricTestRunner::class)
@@ -133,12 +136,14 @@ class ScreenshotGalleryTest {
         var clock = 3_000L
         compose.setContent {
             PodyomTheme {
-                PracticeMission(MissionSpec(count = 1, difficulty = 2), PrivateAlarm(), null, {},
-                    now = { clock }, newSeed = { 77 })
+                Surface(Modifier.fillMaxSize()) {
+                    PracticePanel(MissionSpec(count = 1, difficulty = 2), PrivateAlarm(), null, {},
+                        now = { clock }, newSeed = { 77 })
+                }
             }
         }
         compose.onNodeWithText("Проверить").assertIsDisplayed()
-        save("practice", dialog = true)
+        save("practice")
         compose.onNodeWithText("Ответ").performTextReplacement(Missions.math(77, 2).answer.toString())
         compose.runOnIdle { clock = 5_100 }
         compose.onNodeWithText("Проверить").performClick()

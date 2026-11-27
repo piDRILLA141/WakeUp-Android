@@ -19,6 +19,15 @@ import kotlin.random.Random
 @Composable
 internal fun PracticeMission(
     spec: MissionSpec, profile: PrivateAlarm, photo: PhotoReference?, onClose: () -> Unit,
+) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn)) {
+        Surface(shape = MaterialTheme.shapes.large) { PracticePanel(spec, profile, photo, onClose) }
+    }
+}
+
+@Composable
+internal fun PracticePanel(
+    spec: MissionSpec, profile: PrivateAlarm, photo: PhotoReference?, onClose: () -> Unit,
     now: () -> Long = SystemClock::elapsedRealtime, newSeed: () -> Int = { Random.nextInt() },
 ) {
     var attempt by remember(spec) { mutableStateOf(MissionPractice(spec, newSeed(), now)) }
@@ -30,35 +39,31 @@ internal fun PracticeMission(
         feedback = null
     }
     val duration = remember(attempt, revision) { attempt.resultMillis }
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn)) {
-        Surface(shape = MaterialTheme.shapes.large) {
-            Column(Modifier.fillMaxWidth().heightIn(max = 650.dp).imePadding()
-                .verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Пробное задание · ${attempt.spec.kind.title}", style = MaterialTheme.typography.headlineSmall)
-                Text("Будильник и проверка пробуждения не запускаются.")
-                key(attempt) {
-                    when {
-                        duration != null -> Text("Выполнено за ${(duration + 999) / 1000} с", style = MaterialTheme.typography.titleLarge)
-                        attempt.spec.kind == MissionKind.PHOTO -> PhotoMission(photo, {
-                            attempt.matchedPhoto(); revision++
-                        }, { retry(MissionSpec(MissionKind.MATH, count = 3)) })
-                        else -> {
-                            Text("Выполнено ${attempt.progress} из ${attempt.spec.count}")
-                            MissionPanel(attempt.spec, attempt.roundSeed, profile, onAnswer = {
-                                feedback = if (attempt.answer(profile, it)) null else "Не совпало. Попробуйте ещё раз."
-                                revision++
-                            }, onMovement = {
-                                attempt.movement(it); revision++
-                            }, fallback = { retry(MissionSpec(MissionKind.MATH, count = 3)) })
-                        }
-                    }
-                }
-                feedback?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    TextButton(onClick = { retry() }) { Text("Повторить") }
-                    TextButton(onClick = onClose) { Text("Закрыть пробу") }
+    Column(Modifier.fillMaxWidth().heightIn(max = 650.dp)
+        .verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Пробное задание · ${attempt.spec.kind.title}", style = MaterialTheme.typography.headlineSmall)
+        Text("Будильник и проверка пробуждения не запускаются.")
+        key(attempt) {
+            when {
+                duration != null -> Text("Выполнено за ${(duration + 999) / 1000} с", style = MaterialTheme.typography.titleLarge)
+                attempt.spec.kind == MissionKind.PHOTO -> PhotoMission(photo, {
+                    attempt.matchedPhoto(); revision++
+                }, { retry(MissionSpec(MissionKind.MATH, count = 3)) })
+                else -> {
+                    Text("Выполнено ${attempt.progress} из ${attempt.spec.count}")
+                    MissionPanel(attempt.spec, attempt.roundSeed, profile, onAnswer = {
+                        feedback = if (attempt.answer(profile, it)) null else "Не совпало. Попробуйте ещё раз."
+                        revision++
+                    }, onMovement = {
+                        attempt.movement(it); revision++
+                    }, fallback = { retry(MissionSpec(MissionKind.MATH, count = 3)) })
                 }
             }
+        }
+        feedback?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            TextButton(onClick = { retry() }) { Text("Повторить") }
+            TextButton(onClick = onClose) { Text("Закрыть пробу") }
         }
     }
 }
