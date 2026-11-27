@@ -23,6 +23,7 @@ timeout 150s bash -c 'until adb get-state 2>/dev/null | grep -qx device; do kill
 timeout 210s bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = 1 ]; do sleep 2; done'
 adb shell input keyevent KEYCODE_WAKEUP
 adb shell wm dismiss-keyguard
+adb shell settings put secure show_ime_with_hard_keyboard 1
 if [[ "$api_level" == 30 ]]; then
   adb shell settings put system font_scale 1.35
   adb shell wm size 720x1280

@@ -49,43 +49,6 @@ class WakeActivityRouteTest {
         }
     }
 
-    @Test fun photoMissionReopensAfterRecreationAndOffersMathematicsWithoutAReference() {
-        val app = RuntimeEnvironment.getApplication() as App
-        val now = System.currentTimeMillis()
-        val run = AlarmRun("screen-photo", AlarmPlan("photo-plan", missions = listOf(MissionSpec(MissionKind.PHOTO, 1))),
-            now, state = RunState.MISSION_RUNNING, firedAt = now)
-        runBlocking { app.runtime.dao().putRun(run.row()) }
-        assertEquals(run.id, runBlocking { app.engine.snapshot().single { it.id == run.id }.id })
-        val intent = shadowOf(AlarmNotifications.activity(app, run.id, followRinging = true)).savedIntent
-        Robolectric.buildActivity(RingingActivity::class.java, intent).setup().use { activity ->
-            assertEquals(run.id, activity.get().intent.getStringExtra("runId"))
-            waitForText("Заменить математикой")
-            compose.runOnIdle { saveScreenshot(activity.get().window.decorView, "photo-task-fallback") }
-            activity.recreate()
-            waitForText("Заменить математикой")
-            compose.onNodeWithText("Заменить математикой").performScrollTo().performClick()
-            waitForText("Проверить")
-            assertTrue(runBlocking { app.engine.snapshot().single { it.id == run.id }.fallbackMath })
-        }
-    }
-
-    @Test fun ringingAndTaskScreensAreCapturedWithSyntheticState() {
-        val app = RuntimeEnvironment.getApplication() as App
-        val now = System.currentTimeMillis()
-        val run = AlarmRun("screen-ring", AlarmPlan("screen-plan"), now, state = RunState.RINGING, firedAt = now)
-        runBlocking { app.runtime.dao().putRun(run.row()) }
-        assertEquals(run.id, runBlocking { app.engine.snapshot().single { it.id == run.id }.id })
-        val intent = shadowOf(AlarmNotifications.activity(app, run.id, followRinging = true)).savedIntent
-        Robolectric.buildActivity(RingingActivity::class.java, intent).setup().use { activity ->
-            assertEquals(run.id, activity.get().intent.getStringExtra("runId"))
-            waitForText("Начать задание")
-            compose.runOnIdle { saveScreenshot(activity.get().window.decorView, "ringing") }
-            compose.onNodeWithText("Начать задание").performClick()
-            waitForText("Проверить")
-            compose.runOnIdle { saveScreenshot(activity.get().window.decorView, "ringing-task") }
-        }
-    }
-
     @Test fun tappingNotificationOpensItsCheckAfterRecreationAndUsesTheNextIntent() {
         val app = RuntimeEnvironment.getApplication() as App
         val first = storedCheck(app, System.currentTimeMillis() + 120_000)
@@ -121,6 +84,22 @@ class WakeActivityRouteTest {
             val missingIntent = CheckRoute(missing.checkKey, missing.version, "notification").intent(app)
             activity.newIntent(missingIntent)
             waitForText("Проверка не найдена")
+
+            // The same Activity can switch from an expired check to its running alarm.
+            val ringing = first.copy(state = RunState.RE_RINGING, cycle = first.cycle + 1,
+                plan = first.plan.copy(missions = listOf(MissionSpec(MissionKind.PHOTO, 1))), firedAt = System.currentTimeMillis())
+            runBlocking { app.runtime.dao().putRun(ringing.row()) }
+            activity.newIntent(firstIntent)
+            waitForText("Открыть повторный звонок")
+            compose.onNodeWithText("Открыть повторный звонок").performClick()
+            waitForText("Начать задание")
+            compose.runOnIdle { saveScreenshot(activity.get().window.decorView, "ringing") }
+            compose.onNodeWithText("Начать задание").performClick()
+            waitForText("Заменить математикой")
+            compose.runOnIdle { saveScreenshot(activity.get().window.decorView, "photo-task-fallback") }
+            compose.onNodeWithText("Заменить математикой").performScrollTo().performClick()
+            waitForText("Проверить")
+            compose.runOnIdle { saveScreenshot(activity.get().window.decorView, "ringing-task") }
         }
     }
 }

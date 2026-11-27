@@ -4,9 +4,6 @@ import android.Manifest
 import android.os.UserManager
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
@@ -98,18 +95,13 @@ class ScreenshotGalleryTest {
         save("diagnostics")
     }
 
-    @Test fun editorPhotoAndMelodiesFitSmallScreenAndPracticeIsIsolated() {
+    @Test fun editorPhotoAndMelodiesFitSmallScreen() {
         val app = ApplicationProvider.getApplicationContext<App>()
         shadowOf(app.getSystemService(UserManager::class.java)).setUserUnlocked(true)
-        val before = runBlocking { app.runtime.dao().runs() }
-        var practice by mutableStateOf(false)
-        var clock = 0L
         compose.setContent {
             PodyomTheme {
                 CompositionLocalProvider(LocalDensity provides Density(LocalDensity.current.density, 1.3f)) {
-                    if (practice) PracticeMission(MissionSpec(count = 1, difficulty = 2), PrivateAlarm(), null, {},
-                        now = { clock }, newSeed = { 77 })
-                    else AlarmEditor(AlarmPlan("preview", missions = listOf(MissionSpec(MissionKind.PHOTO, 1))),
+                    AlarmEditor(AlarmPlan("preview", missions = listOf(MissionSpec(MissionKind.PHOTO, 1))),
                         PrivateAlarm(title = "Тестовый будильник"), {}, { _, _ -> })
                 }
             }
@@ -133,8 +125,18 @@ class ScreenshotGalleryTest {
         compose.onNodeWithText("Разрешить камеру").assertIsDisplayed()
         save("photo-mission-permission", dialog = true)
         compose.onNodeWithText("Закрыть камеру").performClick()
+    }
 
-        compose.runOnIdle { practice = true; clock = 3_000 }
+    @Test fun isolatedPracticeCanCompleteAndRetry() {
+        val app = ApplicationProvider.getApplicationContext<App>()
+        val before = runBlocking { app.runtime.dao().runs() }
+        var clock = 3_000L
+        compose.setContent {
+            PodyomTheme {
+                PracticeMission(MissionSpec(count = 1, difficulty = 2), PrivateAlarm(), null, {},
+                    now = { clock }, newSeed = { 77 })
+            }
+        }
         compose.onNodeWithText("Проверить").assertIsDisplayed()
         save("practice", dialog = true)
         compose.onNodeWithText("Ответ").performTextReplacement(Missions.math(77, 2).answer.toString())

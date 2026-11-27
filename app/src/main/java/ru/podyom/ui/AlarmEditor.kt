@@ -79,8 +79,8 @@ import ru.podyom.missions.CodeScanner
         } catch (e: Exception) { error = e.message ?: "Проверьте настройки" }
     }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Scaffold(topBar = { TopAppBar(title = { Text("Твоё новое утро") }, navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, "Закрыть редактор") } }) }, bottomBar = { Surface { Button(onClick = { saveConfirm = true }, modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp)) { Text("Сохранить будильник") } } }) { inset ->
-            LazyColumn(Modifier.fillMaxSize().padding(inset).imePadding().testTag("editor-content"), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Scaffold(modifier = Modifier.imePadding(), topBar = { TopAppBar(title = { Text("Твоё новое утро") }, navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.Outlined.Close, "Закрыть редактор") } }) }, bottomBar = { Surface { Button(onClick = { saveConfirm = true }, modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp)) { Text("Сохранить будильник") } } }) { inset ->
+            LazyColumn(Modifier.fillMaxSize().padding(inset).testTag("editor-content"), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 initial.skipEpochDays.sorted().forEach { day ->
                     val date = java.time.LocalDate.ofEpochDay(day)
                     if (date >= java.time.LocalDate.now() || initial.days.isEmpty()) item {
