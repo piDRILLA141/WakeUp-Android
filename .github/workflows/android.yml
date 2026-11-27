@@ -137,6 +137,16 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 30
+      - name: Prepare independent photo test fixtures
+        run: |
+          fixtures="$RUNNER_TEMP/podyom-photo-fixtures"
+          mkdir -p "$fixtures"
+          upstream="https://raw.githubusercontent.com/scikit-image/scikit-image/441fe68b95a86d4ae2a351311a0c39a4232b6521/skimage/data"
+          curl --fail --silent --show-error --location --retry 3 --retry-all-errors --max-time 45 "$upstream/coffee.png" -o "$fixtures/coffee.png"
+          curl --fail --silent --show-error --location --retry 3 --retry-all-errors --max-time 45 "$upstream/brick.png" -o "$fixtures/brick.png"
+          test "$(git hash-object "$fixtures/coffee.png")" = f8350bf7e6e22734667f8c86fd230a741370fbcb
+          test "$(git hash-object "$fixtures/brick.png")" = 79941ecd6605663c653e03c85b4ca7e59b3c4412
+          echo "PODYOM_PHOTO_FIXTURES=$fixtures" >> "$GITHUB_ENV"
       - name: Run Kotlin and Robolectric tests
         id: tests
         timeout-minutes: 8
@@ -148,7 +158,7 @@ jobs:
           set -o pipefail
           ./gradlew :core:test :app:testDebugUnitTest --console=plain 2>&1 | tee -a "$RUNNER_TEMP/podyom-build.log"
       - name: Check emulator availability
-        if: ${{ !cancelled() && steps.binaries.outcome == 'success' && !inputs.fast_checks }}
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' && !inputs.fast_checks }}
         id: emulator
         run: |
           if [ -c /dev/kvm ]; then
@@ -181,7 +191,7 @@ jobs:
       - name: Check generated screenshots
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         run: |
-          for screen in home-small groups-expanded editor-small-large-font mission-settings photo-mission-permission melodies ringing ringing-task wake-check-activity settings diagnostics sleep practice; do
+          for screen in home-small groups-expanded editor-small-large-font mission-settings photo-mission-permission photo-task-fallback melodies ringing ringing-task wake-check-activity settings diagnostics sleep practice; do
             test -s "app/build/reports/screenshots/$screen.png"
           done
       - name: Upload synthetic screenshots

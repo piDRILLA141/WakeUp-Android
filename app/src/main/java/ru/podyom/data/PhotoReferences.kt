@@ -35,11 +35,9 @@ class PhotoReferences(private val app: App) {
         return id
     }
 
-    suspend fun removeUnused(privateKeysInUse: Set<String>) {
+    suspend fun removeUnused(privateKeysInUse: Set<String>, photos: List<String>) {
         if (!app.unlocked) return
         val dao = app.privateDb.dao()
-        val photos = dao.photoKeys()
-        if (photos.isEmpty()) return
         val referenced = privateKeysInUse.mapNotNullTo(HashSet()) { id ->
             dao.profile(id)?.let { codec.decodeFromString<ru.podyom.core.PrivateAlarm>(it.json).photoId }
         }

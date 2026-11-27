@@ -1,5 +1,6 @@
 package ru.podyom
 
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Looper
 import kotlinx.coroutines.CoroutineScope
@@ -26,6 +27,39 @@ import java.util.concurrent.TimeUnit
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36], application = App::class)
 class AlarmAudioTest {
+    @Test fun escalationSwitchesOnceWithoutOverlappingAndWaitsForACallToEnd() {
+        val context = RuntimeEnvironment.getApplication()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        val reports = mutableListOf<AudioSignal>()
+        val players = mutableListOf<MediaPlayer>()
+        val manager = context.getSystemService(AudioManager::class.java)
+        val looper = shadowOf(Looper.getMainLooper())
+        ShadowMediaPlayer.setMediaInfoProvider { ShadowMediaPlayer.MediaInfo(500, 0) }
+        ShadowMediaPlayer.setCreateListener { player, _ -> players += player }
+        val audio = AlarmAudio(context, scope) { _, signal -> reports += signal }
+        val now = 10_000L
+        val run = WakeMachine.due(AlarmRun("escalation",
+            AlarmPlan("alarm", escalationSeconds = 30, escalationSoundId = "signal", vibrate = false, rampSeconds = 0),
+            now), 0, now)
+        try {
+            manager.mode = AudioManager.MODE_IN_COMMUNICATION
+            audio.start(run, PrivateAlarm(melodyId = "bell"), 29_500L)
+            looper.idleFor(2, TimeUnit.SECONDS)
+            assertTrue(players.isEmpty())
+            assertTrue(AudioSignal.CALL_PAUSED in reports)
+            manager.mode = AudioManager.MODE_NORMAL
+            looper.idleFor(2, TimeUnit.SECONDS)
+            assertEquals(1, reports.count { it == AudioSignal.ESCALATED })
+            assertEquals(1, players.count { runCatching { it.isPlaying }.getOrDefault(false) })
+            audio.stop()
+            looper.idleFor(2, TimeUnit.SECONDS)
+            assertTrue(players.none { runCatching { it.isPlaying }.getOrDefault(false) })
+        } finally {
+            audio.stop()
+            scope.cancel()
+        }
+    }
+
     @Test fun stoppedFirstPlayerRecoversAndNewerRingsPlayWithoutOverlapping() {
         val context = RuntimeEnvironment.getApplication()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)

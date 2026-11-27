@@ -219,9 +219,13 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
     private suspend fun prunePhotos() {
         if (!app.unlocked) return
         try {
-            val used = dao.alarms().mapTo(HashSet()) { it.model().privateKey }
-            runs().mapTo(used) { it.plan.privateKey }
-            app.photoReferences.removeUnused(used)
+            val photos = app.privateDb.dao().photoKeys()
+            if (photos.isEmpty()) return
+            val used = (dao.alarms().asSequence().map { it.model() } +
+                runs().asSequence().map { it.plan })
+                .filter { it.missions.any { spec -> spec.kind == MissionKind.PHOTO } }
+                .mapTo(HashSet()) { it.privateKey }
+            app.photoReferences.removeUnused(used, photos)
         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
         catch (_: Exception) { app.journal.report(TechnicalEvent.PHOTO_STORAGE_ERROR) }
     }

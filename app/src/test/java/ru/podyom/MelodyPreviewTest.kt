@@ -47,7 +47,7 @@ class MelodyPreviewTest {
             preview.toggle("signal", Melodies.uri(context, Melodies.escalationDefault), .3f)
             main.idleFor(100, TimeUnit.MILLISECONDS)
             assertEquals(1, created.count { runCatching { it.isPlaying }.getOrDefault(false) })
-            audio.lastAudioFocusRequest.audioFocusRequest.onAudioFocusChangeListener
+            audio.lastAudioFocusRequest.listener
                 .onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
             assertNull(preview.status.value.source)
             preview.toggle("signal", Melodies.uri(context, Melodies.escalationDefault), .3f)

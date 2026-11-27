@@ -1,6 +1,9 @@
 package ru.podyom.core
 
+import java.io.File
 import java.util.concurrent.CancellationException
+import javax.imageio.ImageIO
+import org.junit.Assume.assumeTrue
 import kotlin.math.*
 import org.junit.Assert.*
 import org.junit.Test
@@ -69,6 +72,34 @@ class PhotoMatcherTest {
             val foreign = requireNotNull(PhotoMatcher.extract(scene(seed)).template)
             assertFalse("Unrelated synthetic fixture $seed", PhotoMatcher.compare(reference, foreign).accepted)
         }
+    }
+
+    @Test fun transformedRealCoffeePhotoMatchesButDifferentPhotographDoesNot() {
+        val folder = System.getenv("PODYOM_PHOTO_FIXTURES")?.let(::File)
+        assumeTrue("CI provides the pinned CC0 photos", folder?.isDirectory == true)
+        fun image(name: String): PhotoMatcher.Frame {
+            val source = ImageIO.read(File(requireNotNull(folder), name))
+            val shortSide = min(source.width, source.height)
+            val left = (source.width - shortSide) / 2
+            val top = (source.height - shortSide) / 2
+            val pixels = ByteArray(size * size) { position ->
+                val color = source.getRGB(left + position % size * shortSide / size, top + position / size * shortSide / size)
+                val red = (color shr 16) and 255
+                val green = (color shr 8) and 255
+                val blue = color and 255
+                ((54 * red + 183 * green + 19 * blue) shr 8).toByte()
+            }
+            return PhotoMatcher.Frame(size, size, pixels)
+        }
+        val coffee = image("coffee.png")
+        val template = requireNotNull(PhotoMatcher.extract(coffee).template)
+        val sample = transform(coffee, .089, 1.09, .025, .89)
+        val genuine = PhotoMatcher.compare(template, requireNotNull(PhotoMatcher.extract(sample).template))
+        val foreign = PhotoMatcher.compare(template, requireNotNull(PhotoMatcher.extract(image("brick.png")).template))
+        println("Photo metrics: CC0 coffee, ${genuine.inliers} geometric inliers after transform")
+        println("Photo metrics: CC0 brick negative, ${foreign.inliers} geometric inliers")
+        assertTrue("Transformed photo of the same scene: $genuine", genuine.accepted)
+        assertFalse("Different CC0 photo: $foreign", foreign.accepted)
     }
 
     @Test fun checksLightingBlurDamageAndCancellation() {

@@ -49,6 +49,24 @@ class WakeActivityRouteTest {
         }
     }
 
+    @Test fun photoMissionReopensAfterRecreationAndOffersMathematicsWithoutAReference() {
+        val app = RuntimeEnvironment.getApplication() as App
+        val now = System.currentTimeMillis()
+        val run = AlarmRun("screen-photo", AlarmPlan("photo-plan", missions = listOf(MissionSpec(MissionKind.PHOTO, 1))),
+            now, state = RunState.MISSION_RUNNING, firedAt = now)
+        runBlocking { app.runtime.dao().putRun(run.row()) }
+        val intent = Intent(app, RingingActivity::class.java).putExtra("runId", run.id)
+        Robolectric.buildActivity(RingingActivity::class.java, intent).setup().use { activity ->
+            waitForText("Заменить математикой")
+            compose.runOnIdle { saveScreenshot(activity.get().window.decorView, "photo-task-fallback") }
+            activity.recreate()
+            waitForText("Заменить математикой")
+            compose.onNodeWithText("Заменить математикой").performScrollTo().performClick()
+            waitForText("Проверить")
+            assertTrue(runBlocking { app.engine.snapshot().single { it.id == run.id }.fallbackMath })
+        }
+    }
+
     @Test fun ringingAndTaskScreensAreCapturedWithSyntheticState() {
         val app = RuntimeEnvironment.getApplication() as App
         val now = System.currentTimeMillis()

@@ -43,8 +43,11 @@ import java.util.concurrent.atomic.AtomicInteger
 
 @Composable
 fun PhotoThumbnail(reference: PhotoReference?) {
-    val bitmap by produceState<android.graphics.Bitmap?>(null, reference?.thumbnail) {
-        value = withContext(Dispatchers.Default) { decodePhotoThumbnail(reference?.thumbnail) }
+    val thumbnail = reference?.thumbnail ?: return
+    val bitmap by key(thumbnail) {
+        produceState<android.graphics.Bitmap?>(null) {
+            value = withContext(Dispatchers.Default) { decodePhotoThumbnail(thumbnail) }
+        }
     }
     // Rendering may retain a bitmap through the next frame. The small preview is reclaimed with its composition.
     bitmap?.let { Image(it.asImageBitmap(), contentDescription = "Миниатюра эталона", modifier = Modifier.size(96.dp)) }
