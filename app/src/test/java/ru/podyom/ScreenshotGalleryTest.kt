@@ -36,7 +36,7 @@ class ScreenshotGalleryTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     private fun save(name: String, dialog: Boolean = false) = compose.runOnIdle {
-        val view = if (dialog) checkNotNull(ShadowDialog.getLatestDialog()?.window).decorView
+        val view = if (dialog) checkNotNull(ShadowDialog.getShownDialogs().lastOrNull { it.isShowing }?.window).decorView
             else compose.activity.window.decorView
         saveScreenshot(view, name)
     }
@@ -47,7 +47,14 @@ class ScreenshotGalleryTest {
         val layouts = mutableListOf<TextLayoutResult>()
         node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
         assertTrue("Missing text layout for $label", layouts.isNotEmpty())
-        assertTrue("Text overflow: $label", layouts.none { it.hasVisualOverflow })
+        layouts.forEach { layout ->
+            for (line in 0 until layout.lineCount) {
+                assertFalse("Ellipsized text: $label", layout.isLineEllipsized(line))
+                assertTrue("Line goes beyond available width: $label (${layout.getLineRight(line)}/${layout.size.width})",
+                    layout.getLineLeft(line) >= -2 && layout.getLineRight(line) <= layout.size.width + 2)
+                assertTrue("Line goes beyond available height: $label", layout.getLineBottom(line) <= layout.size.height + 2)
+            }
+        }
     }
 
     @Test fun screenshotsHomeGroupsDiagnosticsSettingsAndSleep() {

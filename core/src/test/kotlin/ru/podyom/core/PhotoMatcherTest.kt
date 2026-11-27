@@ -52,9 +52,16 @@ class PhotoMatcherTest {
 
     @Test fun acceptsReferenceAndModerateGeometricAndLightChangesAndRejectsUnrelatedFixtures() {
         val first = scene(1)
+        val allocationProbe = java.lang.management.ManagementFactory.getThreadMXBean() as? com.sun.management.ThreadMXBean
+        val thread = Thread.currentThread().threadId()
+        fun allocated() = runCatching { allocationProbe?.getThreadAllocatedBytes(thread)?.takeIf { it >= 0 } }.getOrNull()
+        val baseline = allocated()
         val start = System.nanoTime()
         val reference = requireNotNull(PhotoMatcher.extract(first).template)
-        println("Photo metrics: first extraction ${(System.nanoTime() - start) / 1_000_000} ms, ${reference.points.size} points, ${first.luma.size} luma bytes")
+        val duration = (System.nanoTime() - start) / 1_000_000
+        val bytes = baseline?.let { before -> allocated()?.minus(before) }
+        println("Photo metrics: first extraction $duration ms, ${reference.points.size} points, ${first.luma.size} luma bytes")
+        if (bytes != null) println("Photo metrics: $bytes JVM bytes allocated during first extraction, cumulative allocation, not peak heap")
         val cases = listOf(
             transform(first, .15, 1.0, .0, .82),
             transform(first, -.18, 1.21, .021, 1.04),

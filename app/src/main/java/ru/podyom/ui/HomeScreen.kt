@@ -125,7 +125,7 @@ import java.util.UUID
                     item {
                         val hour = LocalTime.now().hour
                         Text(when(hour) { in 5..11 -> "Доброе утро"; in 12..17 -> "Добрый день"; else -> "Добрый вечер" }, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                        Spacer(Modifier.height(8.dp)); Text("Начни свой день", style = MaterialTheme.typography.headlineLarge)
+                        Spacer(Modifier.height(8.dp)); Text("Начни свой день", style = MaterialTheme.typography.headlineMedium)
                         val nearest = runs.filter { it.state == RunState.SCHEDULED }.minByOrNull { it.eventAt }
                         Text(nearest?.let { "Следующий будильник через ${duration(it.eventAt - calendarNow.longValue)}" } ?: "Время для нового утра", style = MaterialTheme.typography.bodyLarge)
                     }

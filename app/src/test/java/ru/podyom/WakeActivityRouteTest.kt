@@ -55,8 +55,10 @@ class WakeActivityRouteTest {
         val run = AlarmRun("screen-photo", AlarmPlan("photo-plan", missions = listOf(MissionSpec(MissionKind.PHOTO, 1))),
             now, state = RunState.MISSION_RUNNING, firedAt = now)
         runBlocking { app.runtime.dao().putRun(run.row()) }
-        val intent = Intent(app, RingingActivity::class.java).putExtra("runId", run.id)
+        assertEquals(run.id, runBlocking { app.engine.snapshot().single { it.id == run.id }.id })
+        val intent = shadowOf(AlarmNotifications.activity(app, run.id, followRinging = true)).savedIntent
         Robolectric.buildActivity(RingingActivity::class.java, intent).setup().use { activity ->
+            assertEquals(run.id, activity.get().intent.getStringExtra("runId"))
             waitForText("Заменить математикой")
             compose.runOnIdle { saveScreenshot(activity.get().window.decorView, "photo-task-fallback") }
             activity.recreate()
@@ -72,8 +74,10 @@ class WakeActivityRouteTest {
         val now = System.currentTimeMillis()
         val run = AlarmRun("screen-ring", AlarmPlan("screen-plan"), now, state = RunState.RINGING, firedAt = now)
         runBlocking { app.runtime.dao().putRun(run.row()) }
-        val intent = Intent(app, RingingActivity::class.java).putExtra("runId", run.id)
+        assertEquals(run.id, runBlocking { app.engine.snapshot().single { it.id == run.id }.id })
+        val intent = shadowOf(AlarmNotifications.activity(app, run.id, followRinging = true)).savedIntent
         Robolectric.buildActivity(RingingActivity::class.java, intent).setup().use { activity ->
+            assertEquals(run.id, activity.get().intent.getStringExtra("runId"))
             waitForText("Начать задание")
             compose.runOnIdle { saveScreenshot(activity.get().window.decorView, "ringing") }
             compose.onNodeWithText("Начать задание").performClick()
