@@ -24,6 +24,7 @@
         <activity android:name=".ringing.RingingActivity" android:exported="false" android:directBootAware="true"
             android:showWhenLocked="true" android:turnScreenOn="true" android:launchMode="singleTop" android:taskAffinity="ru.podyom.ringing" />
         <service android:name=".ringing.RingingService" android:exported="false" android:directBootAware="true" android:foregroundServiceType="systemExempted" />
+        <receiver android:name=".alarm.SleepReminderReceiver" android:exported="false" />
         <receiver android:name=".alarm.AlarmReceiver" android:exported="false" android:directBootAware="true" />
         <receiver android:name=".alarm.RestoreReceiver" android:exported="false" android:directBootAware="true">
             <intent-filter>

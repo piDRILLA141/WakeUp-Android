@@ -18,7 +18,8 @@ import java.util.UUID
 @Serializable data class BackupAlarm(val plan: AlarmPlan, val profile: PrivateAlarm)
 @Serializable data class BackupGroup(val group: AlarmGroup, val name: String)
 @Serializable data class Backup(val version: Int = 2, val alarms: List<BackupAlarm>,
-    val settings: AppSettings = AppSettings(), val groups: List<BackupGroup> = emptyList())
+    val settings: AppSettings = AppSettings(), val groups: List<BackupGroup> = emptyList(),
+    val sleepReminder: SleepSettings? = null)
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as App
     val alarms = app.runtime.dao().observeAlarms().map { list -> list.map { it.model() } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -28,6 +29,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val runs = rows.map { list -> list.map { it.model() } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val profiles = app.privateDb.dao().profiles().map { rows -> rows.associate { it.id to codec.decodeFromString<PrivateAlarm>(it.json) } }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
     val settings = app.settings.flow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppSettings(readySeen = true, wakeSessionsSeen = true))
+    val sleepReminder = app.settings.sleepFlow.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SleepSettings())
+    val sleepOpen = MutableStateFlow(0)
+    fun showSleep() { sleepOpen.value++ }
+    fun configureSleep(settings: SleepSettings) = action {
+        app.sleepReminders.configure(settings)
+        messages.emit(if (settings.enabled) "Напоминания о сне включены" else "Напоминания о сне выключены")
+    }
     val sleep = app.privateDb.dao().sleep().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     fun action(block: suspend () -> Unit) { viewModelScope.launch { try { block() } catch (e: Exception) { if(e is CancellationException) throw e; messages.emit(e.message ?: "Не удалось выполнить действие") } } }
@@ -36,7 +44,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun restoreOnce() {
         if (app.foregroundScheduleRestored.compareAndSet(false, true)) {
             action {
-                try { app.engine.restore() }
+                try {
+                    app.engine.restore()
+                    app.sleepReminders.restore()
+                }
                 catch (e: Exception) { app.foregroundScheduleRestored.set(false); throw e }
             }
         }
@@ -173,7 +184,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val groupEntries = app.runtime.dao().observeGroups().first().map { row ->
             BackupGroup(row.model(), app.engine.profile(row.id)?.title ?: "Группа")
         }
-        val backup = Backup(alarms = entries, settings = app.settings.flow.first(), groups = groupEntries)
+        val backup = Backup(alarms = entries, settings = app.settings.flow.first(), groups = groupEntries,
+            sleepReminder = app.settings.sleepRecord().settings)
         withContext(Dispatchers.IO) { app.contentResolver.openOutputStream(uri, "wt")!!.bufferedWriter().use { it.write(codec.encodeToString(backup)) } }
         messages.emit("Будильники экспортированы. Файл содержит ваши фразы и QR-коды")
     }
@@ -186,6 +198,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } }
         val backup = codec.decodeFromString<Backup>(text)
         require(backup.version in 1..2 && backup.alarms.size <= 500 && backup.groups.size <= 500) { "Неподдерживаемый формат" }
+        backup.sleepReminder?.validate()
         backup.alarms.forEach { it.plan.validate(); require(it.profile.phrase.length in 1..500 && it.profile.title.length <= 100 && it.profile.qr.length <= 4096); require(it.plan.missions.none { m -> m.kind == MissionKind.QR } || it.profile.qr.isNotEmpty()) }
         require(backup.groups.all { it.name.trim().length in 1..60 } &&
             backup.groups.map { it.group.id }.distinct().size == backup.groups.size) { "Некорректные группы" }
@@ -199,6 +212,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }.toMap(), groupId = if (it.plan.quick) null else imported[it.plan.groupId]),
                 it.profile.copy(soundUri = "", photoId = null))
         }
+        backup.sleepReminder?.let { app.sleepReminders.configure(it) }
         app.settings.deduplicate(backup.settings.deduplicate)
         app.settings.light(backup.settings.light); app.settings.clock24(backup.settings.clock24); app.settings.enhanced(backup.settings.enhancedCheck)
         messages.emit("Импортировано ${backup.alarms.size}. Включите нужные будильники. Выберите файлы мелодий и снимите фотоэталоны заново")

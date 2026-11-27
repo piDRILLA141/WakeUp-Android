@@ -15,7 +15,13 @@ class App : Application() {
     val runtime by lazy { RuntimeDatabase.open(this) }
     val privateDb by lazy { check(unlocked); PrivateDatabase.open(this) }
     val settings by lazy { SettingsStore(this) }
+    val melodyPreview by lazy {
+        ru.podyom.ringing.MelodyPreview(this) { played ->
+            journal.report(if (played) TechnicalEvent.AUDIO_PREVIEW_STARTED else TechnicalEvent.AUDIO_PREVIEW_ERROR)
+        }
+    }
     val photoReferences by lazy { PhotoReferences(this) }
+    val sleepReminders by lazy { SleepReminders(this) }
     val scheduler by lazy { AlarmScheduler(this) }
     val journal by lazy { TechnicalJournal(this) }
     val foregroundScheduleRestored = java.util.concurrent.atomic.AtomicBoolean(false)

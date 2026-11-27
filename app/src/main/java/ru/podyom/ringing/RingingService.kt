@@ -115,6 +115,7 @@ class RingingService : Service() {
         if (selected == null) {
             if (activeId != null) {
                 audio.stop()
+                app.melodyPreview.setAlarmActive(false)
                 activeId = null
                 AlarmNotifications.clearAudioFailure(this)
             }
@@ -139,12 +140,14 @@ class RingingService : Service() {
         }
 
         // Release the old player before resolving the new profile. The engine keeps only independent runs and runs protected from replacement.
+        app.melodyPreview.setAlarmActive(true)
         audio.stop()
         AlarmNotifications.clearAudioFailure(this)
         activeId = selected.id
         val profile = runCatching { app.engine.profile(selected.plan.privateKey) }.getOrNull()
         app.journal.report(TechnicalEvent.RING_PRIORITY_CHANGED, selected.id, selected.version)
-        audio.start(selected, profile)
+        val ringingAge = WakeMachine.RING_LIMIT_MILLIS - (app.engine.ringExpiresElapsed(selected) - SystemClock.elapsedRealtime())
+        audio.start(selected, profile, ringingAge)
         notifications.notify(AlarmNotifications.SERVICE_ID, AlarmNotifications.ringing(
             this, selected, profile?.title ?: "Подъём · разблокируйте телефон", announce = true,
         ))
@@ -171,6 +174,7 @@ class RingingService : Service() {
         unregisterReceiver(screenReceiver)
         overlay.close()
         audio.stop()
+        app.melodyPreview.setAlarmActive(false)
         AlarmNotifications.clearAudioFailure(this)
         scope.cancel()
         lock?.let { if (it.isHeld) it.release() }

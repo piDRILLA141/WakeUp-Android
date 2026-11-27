@@ -6,6 +6,15 @@ import kotlin.random.Random
 
 data class MathChallenge(val text: String, val answer: Int)
 object Missions {
+    fun answerMatches(spec: MissionSpec, seed: Int, profile: PrivateAlarm?, value: String): Boolean =
+        when (spec.kind) {
+            MissionKind.MATH -> value.toIntOrNull() == math(seed, spec.difficulty).answer
+            MissionKind.TEXT -> profile != null && textMatches(profile.phrase, value)
+            MissionKind.QR -> profile != null && qrMatches(profile.qr, value)
+            MissionKind.MEMORY -> value == memory(seed, spec.grid, spec.length).joinToString(",")
+            MissionKind.PHOTO, MissionKind.SHAKE, MissionKind.STEPS -> false
+        }
+
     fun math(seed: Int, difficulty: Int): MathChallenge {
         val random = Random(seed)
         val bound = when(difficulty) { 1 -> 10; 2 -> 30; else -> 100 }

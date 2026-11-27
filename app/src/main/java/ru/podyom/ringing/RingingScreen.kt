@@ -159,7 +159,8 @@ import java.time.format.DateTimeFormatter
             Button(onClick={onAnswer(input)},enabled=spec.kind==MissionKind.MATH || private!=null,modifier=Modifier.fillMaxWidth()){Text("Проверить")}
         }
         MissionKind.MEMORY -> MemoryPanel(seed,spec,onAnswer)
-        MissionKind.QR -> {Text("Отсканируйте зарегистрированный код");if(private!=null) CodeScanner(onCode=onAnswer,modifier=Modifier.fillMaxWidth().height(330.dp)) else Text("Код защищён до первой разблокировки")}
+        MissionKind.QR -> {Text("Отсканируйте зарегистрированный код");if (!private?.qr.isNullOrBlank()) CodeScanner(onCode = onAnswer, modifier = Modifier.fillMaxWidth().height(240.dp))
+            else Text("Код недоступен. Зарегистрируйте его в редакторе или разблокируйте телефон.")}
         MissionKind.SHAKE,MissionKind.STEPS -> SensorMission(spec.kind,onMovement,fallback)
         MissionKind.PHOTO -> error("Photo missions require a private reference")
     }

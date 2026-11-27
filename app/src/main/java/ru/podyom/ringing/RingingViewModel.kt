@@ -70,13 +70,7 @@ class RingingViewModel(application: Application):AndroidViewModel(application) {
         val private=app.engine.profile(snapshot.plan.privateKey)
         app.engine.update(id) {r,t->
             if(r.version!=token || r.state!=RunState.MISSION_RUNNING) r else {
-                val valid=when(r.mission.kind) {
-                    MissionKind.MATH -> value.toIntOrNull()==Missions.math(Missions.challengeSeed(r),r.mission.difficulty).answer
-                    MissionKind.TEXT -> private!=null && Missions.textMatches(private.phrase,value)
-                    MissionKind.QR -> private!=null && Missions.qrMatches(private.qr,value)
-                    MissionKind.MEMORY -> value==Missions.memory(Missions.challengeSeed(r),r.mission.grid,r.mission.length).joinToString(",")
-                    else -> false
-                }
+                val valid = Missions.answerMatches(r.mission, Missions.challengeSeed(r), private, value)
                 if(valid) {message.value="";WakeMachine.progress(r,token,t)} else {message.value="Не совпало. Попробуйте ещё раз";r}
             }
         }

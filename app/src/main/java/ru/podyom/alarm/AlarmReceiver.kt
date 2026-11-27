@@ -53,7 +53,11 @@ class RestoreReceiver : BroadcastReceiver() {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try { context.app.engine.restore(intent.action in setOf(Intent.ACTION_TIME_CHANGED, Intent.ACTION_TIMEZONE_CHANGED)) }
             catch (e: Exception) { AlarmNotifications.failure(context, "Не удалось восстановить расписание: ${e.javaClass.simpleName}") }
-            finally { if (lock.isHeld) lock.release(); result.finish() }
+            finally {
+                try { context.app.sleepReminders.restore() }
+                catch (_: Exception) { context.app.journal.report(TechnicalEvent.SLEEP_REMINDER_ERROR) }
+                finally { if (lock.isHeld) lock.release(); result.finish() }
+            }
         }
     }
 }

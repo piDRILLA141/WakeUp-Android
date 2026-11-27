@@ -1,8 +1,6 @@
 package ru.podyom.ui
 
-import androidx.core.net.toUri
 import android.content.Intent
-import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -30,6 +28,8 @@ import ru.podyom.data.PhotoReference
 import ru.podyom.data.TechnicalEvent
 import ru.podyom.missions.PhotoCamera
 import ru.podyom.missions.PhotoThumbnail
+import ru.podyom.missions.PracticeMission
+import ru.podyom.ringing.Melodies
 import ru.podyom.data.codec
 import ru.podyom.missions.CodeScanner
 
@@ -49,14 +49,14 @@ import ru.podyom.missions.CodeScanner
     var saveConfirm by remember { mutableStateOf(false) }
     val context = LocalContext.current
     var photoDraft by remember(initial.id) { mutableStateOf<PhotoReference?>(null) }
+    var practiceIndex by rememberSaveable(initial.id) { mutableStateOf<Int?>(null) }
     var takePhoto by remember { mutableStateOf(false) }
     var photoRemoved by rememberSaveable(initial.id) { mutableStateOf(false) }
     val storedPhoto by produceState<PhotoReference?>(null, private.photoId) {
         if (private.photoId != null) value = context.app.photoReferences.get(private.photoId)
     }
     val photo = photoDraft ?: storedPhoto.takeUnless { photoRemoved }
-    var player by remember { mutableStateOf<MediaPlayer?>(null) }
-    DisposableEffect(Unit) { onDispose { player?.release() } }
+    var library by rememberSaveable(initial.id) { mutableStateOf<String?>(null) }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if(uri != null) {
         try { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION); profile(private.copy(soundUri = uri.toString())) } catch (_: Exception) { error = "Не удалось сохранить доступ к файлу" }
     } }
@@ -90,13 +90,28 @@ import ru.podyom.missions.CodeScanner
                 item { OutlinedTextField(private.title, { profile(private.copy(title = it.take(100))) }, label = { Text("Название") }, singleLine = true, modifier = Modifier.fillMaxWidth()) }
                 if(!p.quick) item { Text("Повторение", style = MaterialTheme.typography.titleLarge); FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) { listOf("Пн","Вт","Ср","Чт","Пт","Сб","Вс").forEachIndexed { i, d -> FilterChip(p.days.contains(i+1), { change(p.copy(days = if(i+1 in p.days) p.days-(i+1) else p.days+(i+1), oneShotAt=null)) }, label = { Text(d) }) } }; Text(if(p.days.isEmpty()) "Один раз" else "Каждую выбранную неделю", style = MaterialTheme.typography.bodySmall) }
                 item { HorizontalDivider(); Text("Сигнал", style = MaterialTheme.typography.titleLarge) }
-                item { Text(if(private.soundUri.isEmpty()) "Встроенная мелодия «Рассвет»" else "Выбрана пользовательская мелодия"); FlowRow { TextButton(onClick = { profile(private.copy(soundUri = "")) }) { Text("Рассвет") }; TextButton(onClick = { systemPicker.launch(Intent(RingtoneManager.ACTION_RINGTONE_PICKER).putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM).putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)) }) { Text("Системные") }; TextButton(onClick = { filePicker.launch(arrayOf("audio/*")) }) { Text("Из файла") }; TextButton(onClick = {
-                    if(player != null) { player?.release(); player = null } else try {
-                        val uri = private.soundUri.takeIf { it.isNotBlank() }?.let(Uri::parse) ?: "android.resource://${context.packageName}/${ru.podyom.R.raw.dawn}".toUri()
-                        player = MediaPlayer().apply { setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ALARM).build()); setDataSource(context,uri); prepare(); setVolume(p.volume,p.volume); start(); setOnCompletionListener { it.release(); player=null } }
-                    } catch (_: Exception) { player?.release(); player=null; error="Мелодия недоступна. При звонке будет использован «Рассвет»" }
-                }) { Text(if(player == null) "Прослушать" else "Остановить") } } }
+                item {
+                    val title = if (private.soundUri.isNotBlank()) "Пользовательская мелодия"
+                        else (Melodies.tone(private.melodyId) ?: Melodies.default).name
+                    OutlinedButton(onClick = { library = "main" }) { Text("Мелодия · $title") }
+                }
                 item { Text("Уровень сигнала: ${(p.volume*100).toInt()}% от системной громкости"); Slider(p.volume, { change(p.copy(volume = it)) }, valueRange = .05f..1f); NumberSetting("Плавное усиление, секунд", p.rampSeconds, 0..120) { change(p.copy(rampSeconds=it)) }; ToggleRow("Вибрация", p.vibrate) { change(p.copy(vibrate=it)) }; ToggleRow("Приглушать во время задания", p.duckDuringMission) { change(p.copy(duckDuringMission=it)) } }
+                item {
+                    ToggleRow("Усилить сигнал без ответа", p.escalationSeconds != null) { enabled ->
+                        change(p.copy(escalationSeconds = if (enabled) 60 else null))
+                    }
+                    if (p.escalationSeconds != null) {
+                        Text("Через")
+                        FlowRow {
+                            AlarmEscalation.intervals.forEach { seconds ->
+                                FilterChip(p.escalationSeconds == seconds, { change(p.copy(escalationSeconds = seconds)) },
+                                    label = { Text(if (seconds < 60) "$seconds с" else "${seconds / 60} мин") })
+                            }
+                        }
+                        val title = (Melodies.tone(p.escalationSoundId) ?: Melodies.escalationDefault).name
+                        OutlinedButton(onClick = { library = "backup" }) { Text("Резервная мелодия · $title") }
+                    }
+                }
                 if (!p.quick) item {
                     ToggleRow("Независимый будильник", p.independent) { change(p.copy(independent = it)) }
                 }
@@ -109,6 +124,7 @@ import ru.podyom.missions.CodeScanner
                         if(m.kind !in setOf(MissionKind.QR, MissionKind.PHOTO)) NumberSetting(if(m.kind == MissionKind.MEMORY) "Раундов" else "Количество", m.count, 1..if(m.kind == MissionKind.MATH) 20 else 50) { update(m.copy(count=it)) }
                         if(m.kind == MissionKind.MATH) FlowRow { listOf("Легко","Средне","Сложно").forEachIndexed { i,s -> FilterChip(m.difficulty==i+1,{update(m.copy(difficulty=i+1))},label={Text(s)},modifier=Modifier.padding(end=4.dp)) } }
                         if(m.kind == MissionKind.MEMORY) { NumberSetting("Размер сетки", m.grid, 2..4) { update(m.copy(grid=it)) }; NumberSetting("Длина последовательности", m.length, 2..12) { update(m.copy(length=it)) } }
+                        TextButton(onClick = { practiceIndex = index }) { Text("Попробовать задание") }
                         if(p.missions.size>1) TextButton(onClick={change(p.copy(missions=p.missions.filterIndexed { i,_ -> i!=index }))}) { Text("Убрать задание") }
                     } }
                 } }
@@ -137,6 +153,21 @@ import ru.podyom.missions.CodeScanner
                 item { HorizontalDivider(); Text("Отложить",style=MaterialTheme.typography.titleLarge); NumberSetting("Максимум откладываний · 0 = выключено",p.snoozeLimit,0..10) {change(p.copy(snoozeLimit=it))}; NumberSetting("Интервал, минут",p.snoozeSeconds/60,1..60) {change(p.copy(snoozeSeconds=it*60))} }
                 error?.let { item { Text(it,color=MaterialTheme.colorScheme.error) } }
             }
+        }
+        library?.let { mode ->
+            val backup = mode == "backup"
+            MelodyLibrary(if (backup) PrivateAlarm(melodyId = p.escalationSoundId) else private, p.volume, backup,
+                onChoose = { id ->
+                    if (backup) change(p.copy(escalationSoundId = id)) else profile(private.copy(melodyId = id, soundUri = ""))
+                }, onClose = { library = null },
+                onSystem = {
+                    systemPicker.launch(Intent(RingtoneManager.ACTION_RINGTONE_PICKER)
+                        .putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
+                        .putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false))
+                }, onFile = { filePicker.launch(arrayOf("audio/*")) })
+        }
+        practiceIndex?.let { index ->
+            p.missions.getOrNull(index)?.let { PracticeMission(it, private, photo, onClose = { practiceIndex = null }) }
         }
         if (takePhoto) PhotoCamera(null, onClose = { takePhoto = false },
             onReference = { photoDraft = it; takePhoto = false },

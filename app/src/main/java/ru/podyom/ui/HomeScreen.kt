@@ -45,6 +45,10 @@ import java.util.UUID
     val rows by vm.rows.collectAsStateWithLifecycle(); val profiles by vm.profiles.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle(); val nights by vm.sleep.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    val openSleep by vm.sleepOpen.collectAsStateWithLifecycle()
+    var handledSleep by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(openSleep) { if (openSleep != handledSleep && openSleep > 0) { handledSleep = openSleep; tab = 1 } }
+    val sleepReminder by vm.sleepReminder.collectAsStateWithLifecycle()
     var editor by rememberSaveable { mutableStateOf<String?>(null) }
     var confirm by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var readiness by rememberSaveable { mutableStateOf(false) }
@@ -217,6 +221,15 @@ import java.util.UUID
                     item { Spacer(Modifier.height(76.dp)) }
                 }
                 1 -> {
+                    item {
+                        val zone = ZoneId.systemDefault()
+                        val failures = rows.asSequence().filter { it.diagnostic.isNotBlank() }.map { it.id }.toSet()
+                        val morning = if (context.app.scheduler.allowed()) runs.asSequence()
+                            .filter { run -> run.state == RunState.SCHEDULED && !run.plan.quick && run.id !in failures &&
+                                run.eventAt > calendarNow.longValue && Instant.ofEpochMilli(run.eventAt).atZone(zone).hour in 4..11 }
+                            .minOfOrNull { it.eventAt } else null
+                        SleepPanel(sleepReminder, morning, vm::configureSleep)
+                    }
                     item { Text("Время восстановиться", style = MaterialTheme.typography.headlineLarge); Text("Ручной дневник сна. Только ваши отметки.") }
                     item { val current = nights.firstOrNull { it.ended == 0L }; Card { Column(Modifier.fillMaxWidth().padding(24.dp)) { Text(if(current == null) "Спокойной ночи" else "Сон начался ${date(current.started)}", style = MaterialTheme.typography.titleLarge); Button(onClick = vm::toggleSleep) { Text(if(current == null) "Начать сон" else "Я проснулся") } } } }
                     val completed = nights.filter { it.ended > 0 }
@@ -413,6 +426,7 @@ private fun AlarmCard(
 
 private fun audioLabel(signal: AudioSignal): String = when (signal) {
     AudioSignal.PLAYBACK_STARTED -> "Началось воспроизведение"
+    AudioSignal.ESCALATED -> "Включилась резервная мелодия"
     AudioSignal.PLAYBACK_STOPPED -> "Плеер остановился"
     AudioSignal.PLAYER_ERROR -> "Ошибка плеера"
     AudioSignal.MEDIA_SERVER_DIED -> "Медиаслужба Android перезапустилась"

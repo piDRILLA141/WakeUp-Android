@@ -62,6 +62,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
     fun recordAudio(id: String, version: Int, signal: AudioSignal) {
         val event = when (signal) {
             AudioSignal.PLAYBACK_STARTED -> TechnicalEvent.AUDIO_STARTED
+            AudioSignal.ESCALATED -> TechnicalEvent.AUDIO_ESCALATED
             AudioSignal.USING_FALLBACK, AudioSignal.RECOVERY_RETRY -> TechnicalEvent.AUDIO_RECOVERY
             AudioSignal.FOCUS_PAUSED, AudioSignal.FOCUS_LOST, AudioSignal.FOCUS_DELAYED, AudioSignal.CALL_PAUSED -> TechnicalEvent.AUDIO_FOCUS_LOST
             AudioSignal.FOCUS_GAINED -> TechnicalEvent.AUDIO_FOCUS_REGAINED

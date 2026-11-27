@@ -14,9 +14,8 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
-import androidx.core.net.toUri
 import kotlinx.coroutines.*
-import ru.podyom.R
+import ru.podyom.core.AlarmEscalation
 import ru.podyom.core.AlarmRun
 import ru.podyom.core.AudioRecovery
 import ru.podyom.core.PrivateAlarm
@@ -39,13 +38,15 @@ class AlarmAudio(
         .setUsage(AudioAttributes.USAGE_ALARM)
         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
         .build()
-    private val fallback = "android.resource://${context.packageName}/${R.raw.dawn}".toUri()
+    private val fallback = Melodies.uri(context, Melodies.default)
     private var owner: AlarmRun? = null
     private var source: Uri? = null
     private var player: MediaPlayer? = null
     private var ready = false
     private var preparedBy = 0L
     private var startedAt: Long? = null
+    private var ringStartedAt = 0L
+    private var escalated = false
     private var focused = Focus.NONE
     private var request: AudioFocusRequest? = null
     private var focusRequests = 0
@@ -66,10 +67,12 @@ class AlarmAudio(
         }
     }
 
-    fun start(run: AlarmRun, profile: PrivateAlarm?) {
+    fun start(run: AlarmRun, profile: PrivateAlarm?, ringingAgeMillis: Long = 0) {
         stop()
         owner = run
-        source = profile?.soundUri?.takeIf { it.isNotEmpty() }?.let(Uri::parse)
+        val primary = profile?.let { Melodies.source(context, it) } ?: fallback
+        source = primary.takeUnless { it == fallback }
+        ringStartedAt = SystemClock.elapsedRealtime() - ringingAgeMillis.coerceAtLeast(0)
         recovery = AudioRecovery()
         keepAwakeForPreparation()
         try {
@@ -128,6 +131,18 @@ class AlarmAudio(
         if (recovery.exhausted) return
         if (focused == Focus.NONE && now >= focusRetryAt && focusRequests < 3) acquireFocus()
         if (focused != Focus.HELD) return
+        if (!escalated && AlarmEscalation.due(run, now - ringStartedAt)) {
+            escalated = true
+            val tone = Melodies.tone(run.plan.escalationSoundId) ?: Melodies.escalationDefault
+            val louder = Melodies.uri(context, tone)
+            if (louder != (source ?: fallback) || recovery.useFallback) {
+                releasePlayer()
+                source = louder.takeUnless { it == fallback }
+                recovery = AudioRecovery()
+                retryAt = now
+                signal(AudioSignal.ESCALATED)
+            }
+        }
         val current = player
         when {
             current == null && now >= retryAt -> preparePlayer()
@@ -244,10 +259,7 @@ class AlarmAudio(
         val current = player ?: return
         if (!ready) return
         val elapsed = SystemClock.elapsedRealtime() - (startedAt ?: return)
-        val rampMillis = run.plan.rampSeconds * 1_000L
-        val ramp = if (rampMillis == 0L) 1f else (elapsed.toFloat() / rampMillis).coerceIn(0.05f, 1f)
-        val multiplier = if (run.state == RunState.MISSION_RUNNING && run.plan.duckDuringMission) 0.25f else 1f
-        val volume = run.plan.volume * ramp * multiplier
+        val volume = AlarmEscalation.playerVolume(run, elapsed)
         runCatching { current.setVolume(volume, volume) }.onFailure { broken(AudioSignal.PLAYER_ERROR) }
     }
 
@@ -314,12 +326,15 @@ class AlarmAudio(
         focusRetryAt = 0L
         retryAt = 0L
         startedAt = null
+        ringStartedAt = 0
+        escalated = false
         suspendedForCall = false
     }
 }
 
 enum class AudioSignal(val detail: String? = null) {
     PLAYBACK_STARTED,
+    ESCALATED,
     PLAYBACK_STOPPED,
     PLAYER_ERROR,
     MEDIA_SERVER_DIED,

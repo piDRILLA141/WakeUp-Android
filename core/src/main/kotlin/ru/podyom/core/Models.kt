@@ -38,6 +38,8 @@ import kotlinx.serialization.Serializable
     val vibrate: Boolean = true,
     val volume: Float = 0.8f,
     val rampSeconds: Int = 20,
+    val escalationSeconds: Int? = null,
+    val escalationSoundId: String = "signal",
     val duckDuringMission: Boolean = true,
     val quick: Boolean = false,
     val oneShotAt: Long? = null,
@@ -58,6 +60,8 @@ import kotlinx.serialization.Serializable
         require(oneShotAt == null || oneShotAt > 0)
         require(skipEpochDays.all { it in -365243219162L..365241780471L })
         require(!quick || days.isEmpty())
+        require(escalationSeconds == null || escalationSeconds in AlarmEscalation.intervals)
+        require(escalationSoundId.length in 1..50)
         require(volume in 0.05f..1f && rampSeconds in 0..120)
     }
 }
@@ -67,6 +71,7 @@ data class AlarmGroup(val id: String, val enabled: Boolean = true, val cancelBac
 @Serializable data class PrivateAlarm(
     val title: String = "Новое утро",
     val soundUri: String = "",
+    val melodyId: String = "dawn",
     val phrase: String = "Я проснулся и начинаю новый день",
     val qr: String = "",
     val photoId: String? = null,

@@ -1,6 +1,8 @@
 package ru.podyom.ui
 
 import android.os.Bundle
+import android.content.Intent
+import ru.podyom.alarm.SleepReminders
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -15,6 +17,7 @@ class MainActivity : ComponentActivity() {
     private val vm by viewModels<MainViewModel>()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState); enableEdgeToEdge()
+        if (intent.action == SleepReminders.OPEN_SLEEP) vm.showSleep()
         setContent { val settings by vm.settings.collectAsStateWithLifecycle(); PodyomTheme(settings.light) {
             HomeScreen(vm)
             if (settings.readySeen && !settings.wakeSessionsSeen) {
@@ -27,5 +30,11 @@ class MainActivity : ComponentActivity() {
             }
         } }
     }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == SleepReminders.OPEN_SLEEP) vm.showSleep()
+    }
+
     override fun onStart() { super.onStart(); vm.restoreOnce() }
 }
