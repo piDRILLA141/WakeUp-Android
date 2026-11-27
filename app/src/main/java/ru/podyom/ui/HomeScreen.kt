@@ -259,7 +259,7 @@ import java.util.UUID
                     item { Button(onClick = { readiness = true }, modifier = Modifier.fillMaxWidth()) { Text("Проверка разрешений") } }
                     item { OutlinedButton(onClick = { vm.test() }, modifier = Modifier.fillMaxWidth()) { Text("Будильник через 10 секунд") } }
                     if(BuildConfig.DEBUG) item { OutlinedButton(onClick = { vm.test(true) }, modifier = Modifier.fillMaxWidth()) { Text("Тест Wake Up Check · 10 / 10 секунд") } }
-                    item { OutlinedButton(onClick = { export.launch("podyom-backup.json") }, modifier = Modifier.fillMaxWidth()) { Text("Экспорт будильников") }; OutlinedButton(onClick = { import.launch(arrayOf("application/json", "text/plain")) }, modifier = Modifier.fillMaxWidth()) { Text("Импорт будильников") }; Text("Импорт добавляет выключенные копии. Файлы мелодий нужно выбрать заново.", style = MaterialTheme.typography.bodySmall) }
+                    item { OutlinedButton(onClick = { export.launch("podyom-backup.json") }, modifier = Modifier.fillMaxWidth()) { Text("Экспорт будильников") }; OutlinedButton(onClick = { import.launch(arrayOf("application/json", "text/plain")) }, modifier = Modifier.fillMaxWidth()) { Text("Импорт будильников") }; Text("Импорт добавляет выключенные копии. Файлы мелодий и фотоэталоны нужно выбрать заново.", style = MaterialTheme.typography.bodySmall) }
                     item { TextButton(onClick = { confirm = "Удалить историю пробуждений и сна? Активные события сохранятся." to vm::clearHistory }) { Text("Очистить историю") } }
                     item { Text("Подъём ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.titleLarge); Text("Бесплатно. Без рекламы, аккаунтов и интернета.\nФотозадание, приседания и анализ звуков сна не включены: для них ещё нужна проверенная реализация.", style = MaterialTheme.typography.bodySmall) }
                 }
@@ -333,7 +333,9 @@ import java.util.UUID
             original ?: AlarmPlan(UUID.randomUUID().toString(), groupId = key.substringAfter("new:", "").ifBlank { null })
         }
         val initialProfile = remember(key) { original?.let { profiles[it.privateKey] } ?: PrivateAlarm() }
-        AlarmEditor(initialPlan, initialProfile, onClose = { editor = null }, onSave = { p, private -> vm.save(p, private) { editor = null } })
+        AlarmEditor(initialPlan, initialProfile, onClose = { editor = null },
+            onSave = { p, private -> vm.save(p, private) { editor = null } },
+            onSavePhoto = { p, private, draft -> vm.save(p, private, draft) { editor = null } })
     }
     confirm?.let { (text, action) -> AlertDialog(onDismissRequest = { confirm = null }, title = { Text("Подтвердите действие") }, text = { Text(text) }, confirmButton = { TextButton(onClick = { action(); confirm = null }) { Text("Подтвердить") } }, dismissButton = { TextButton(onClick = { confirm = null }) { Text("Отмена") } }) }
     val ringingForeground by vm.ringingForeground.collectAsStateWithLifecycle()

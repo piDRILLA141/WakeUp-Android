@@ -15,6 +15,7 @@ class App : Application() {
     val runtime by lazy { RuntimeDatabase.open(this) }
     val privateDb by lazy { check(unlocked); PrivateDatabase.open(this) }
     val settings by lazy { SettingsStore(this) }
+    val photoReferences by lazy { PhotoReferences(this) }
     val scheduler by lazy { AlarmScheduler(this) }
     val journal by lazy { TechnicalJournal(this) }
     val foregroundScheduleRestored = java.util.concurrent.atomic.AtomicBoolean(false)

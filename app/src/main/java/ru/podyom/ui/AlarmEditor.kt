@@ -24,12 +24,18 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import ru.podyom.app
 import ru.podyom.core.*
+import ru.podyom.data.PhotoReference
+import ru.podyom.data.TechnicalEvent
+import ru.podyom.missions.PhotoCamera
+import ru.podyom.missions.PhotoThumbnail
 import ru.podyom.data.codec
 import ru.podyom.missions.CodeScanner
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
-@Composable fun AlarmEditor(initial: AlarmPlan, privateInitial: PrivateAlarm, onClose: () -> Unit, onSave: (AlarmPlan, PrivateAlarm) -> Unit) {
+@Composable fun AlarmEditor(initial: AlarmPlan, privateInitial: PrivateAlarm, onClose: () -> Unit,
+    onSave: (AlarmPlan, PrivateAlarm) -> Unit, onSavePhoto: ((AlarmPlan, PrivateAlarm, PhotoReference?) -> Unit)? = null) {
     var planJson by rememberSaveable(initial.id) { mutableStateOf(codec.encodeToString(initial)) }
     val p = remember(planJson) { codec.decodeFromString<AlarmPlan>(planJson) }
     fun change(value: AlarmPlan) { planJson = codec.encodeToString(value) }
@@ -42,6 +48,13 @@ import ru.podyom.missions.CodeScanner
     var error by remember { mutableStateOf<String?>(null) }
     var saveConfirm by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    var photoDraft by remember(initial.id) { mutableStateOf<PhotoReference?>(null) }
+    var takePhoto by remember { mutableStateOf(false) }
+    var photoRemoved by rememberSaveable(initial.id) { mutableStateOf(false) }
+    val storedPhoto by produceState<PhotoReference?>(null, private.photoId) {
+        if (private.photoId != null) value = context.app.photoReferences.get(private.photoId)
+    }
+    val photo = photoDraft ?: storedPhoto.takeUnless { photoRemoved }
     var player by remember { mutableStateOf<MediaPlayer?>(null) }
     DisposableEffect(Unit) { onDispose { player?.release() } }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if(uri != null) {
@@ -58,7 +71,10 @@ import ru.podyom.missions.CodeScanner
             val plan = p.copy(hour = parsed.hour, minute = parsed.minute, oneShotAt = if(parsed.hour==initial.hour && parsed.minute==initial.minute) p.oneShotAt else null); plan.validate()
             require(private.phrase.isNotBlank()) { "Введите фразу" }
             require(plan.missions.none { it.kind == MissionKind.QR } || private.qr.isNotEmpty()) { "Зарегистрируйте QR-код" }
-            onSave(plan, private)
+            val usesPhoto = plan.missions.any { it.kind == MissionKind.PHOTO }
+            val changedProfile = if (photoRemoved || !usesPhoto) private.copy(photoId = null) else private
+            if (onSavePhoto != null) onSavePhoto(plan, changedProfile, photoDraft.takeIf { usesPhoto })
+            else onSave(plan, changedProfile)
         } catch (e: Exception) { error = e.message ?: "Проверьте настройки" }
     }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -88,9 +104,9 @@ import ru.podyom.missions.CodeScanner
                 p.missions.forEachIndexed { index, m -> item(key="mission-$index") {
                     OutlinedCard { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Задание ${index+1}", style = MaterialTheme.typography.titleMedium)
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) { MissionKind.entries.forEach { kind -> FilterChip(m.kind == kind, { val list = p.missions.toMutableList(); list[index] = m.copy(kind=kind, count=when(kind) { MissionKind.QR -> 1; MissionKind.STEPS, MissionKind.SHAKE -> 10; else -> 3 }); change(p.copy(missions=list)) }, label={Text(kind.title)}) } }
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(5.dp)) { MissionKind.entries.forEach { kind -> FilterChip(m.kind == kind, { val list = p.missions.toMutableList(); list[index] = m.copy(kind=kind, count=when(kind) { MissionKind.QR, MissionKind.PHOTO -> 1; MissionKind.STEPS, MissionKind.SHAKE -> 10; else -> 3 }); change(p.copy(missions=list)) }, label={Text(kind.title)}) } }
                         fun update(spec: MissionSpec) { val list = p.missions.toMutableList(); list[index]=spec; change(p.copy(missions=list)) }
-                        if(m.kind != MissionKind.QR) NumberSetting(if(m.kind == MissionKind.MEMORY) "Раундов" else "Количество", m.count, 1..if(m.kind == MissionKind.MATH) 20 else 50) { update(m.copy(count=it)) }
+                        if(m.kind !in setOf(MissionKind.QR, MissionKind.PHOTO)) NumberSetting(if(m.kind == MissionKind.MEMORY) "Раундов" else "Количество", m.count, 1..if(m.kind == MissionKind.MATH) 20 else 50) { update(m.copy(count=it)) }
                         if(m.kind == MissionKind.MATH) FlowRow { listOf("Легко","Средне","Сложно").forEachIndexed { i,s -> FilterChip(m.difficulty==i+1,{update(m.copy(difficulty=i+1))},label={Text(s)},modifier=Modifier.padding(end=4.dp)) } }
                         if(m.kind == MissionKind.MEMORY) { NumberSetting("Размер сетки", m.grid, 2..4) { update(m.copy(grid=it)) }; NumberSetting("Длина последовательности", m.length, 2..12) { update(m.copy(length=it)) } }
                         if(p.missions.size>1) TextButton(onClick={change(p.copy(missions=p.missions.filterIndexed { i,_ -> i!=index }))}) { Text("Убрать задание") }
@@ -99,6 +115,16 @@ import ru.podyom.missions.CodeScanner
                 if(!p.quick && p.missions.size<5) item { OutlinedButton(onClick={change(p.copy(missions=p.missions+MissionSpec()))},modifier=Modifier.fillMaxWidth()) { Text("Добавить задание") } }
                 if(p.missions.any { it.kind == MissionKind.TEXT }) item { OutlinedTextField(private.phrase, {profile(private.copy(phrase=it.take(500)))},label={Text("Фраза для набора")}, modifier=Modifier.fillMaxWidth()) }
                 if(p.missions.any { it.kind == MissionKind.QR }) item { Button(onClick={scan=true}) { Text(if(private.qr.isEmpty()) "Зарегистрировать код камерой" else "Заменить зарегистрированный код") }; Text(if(private.qr.isEmpty()) "Код ещё не сохранён" else "Код сохранён локально. Другие коды не подойдут.") }
+                if (p.missions.any { it.kind == MissionKind.PHOTO }) item {
+                    Text("Эталон фотографии", style = MaterialTheme.typography.titleLarge)
+                    Text("Признаки и маленькая миниатюра сохраняются только на телефоне.")
+                    if (photo == null) Text("Эталон не задан. При звонке можно будет пройти математику.")
+                    PhotoThumbnail(photo)
+                    FlowRow {
+                        Button(onClick = { takePhoto = true }) { Text(if (photo == null) "Снять эталон" else "Заменить эталон") }
+                        if (photo != null) TextButton(onClick = { photoRemoved = true; photoDraft = null }) { Text("Удалить эталон") }
+                    }
+                }
                 if(!p.quick) item { HorizontalDivider(); Text("Повторно не засну", style=MaterialTheme.typography.titleLarge); ToggleRow("Проверить, что я проснулся",p.wakeCheck) {change(p.copy(wakeCheck=it))} }
                 if(p.wakeCheck) {
                     item { Text("Задержка после задания"); FlowRow(horizontalArrangement=Arrangement.spacedBy(4.dp)) { listOf(1,3,5,10,15,20).forEach { minutes -> FilterChip(p.wakeDelaySeconds==minutes*60,{change(p.copy(wakeDelaySeconds=minutes*60))}, label={Text("$minutes мин")}) } }; NumberSetting("Своя задержка, минут",p.wakeDelaySeconds/60,1..1440) {change(p.copy(wakeDelaySeconds=it*60))} }
@@ -112,6 +138,9 @@ import ru.podyom.missions.CodeScanner
                 error?.let { item { Text(it,color=MaterialTheme.colorScheme.error) } }
             }
         }
+        if (takePhoto) PhotoCamera(null, onClose = { takePhoto = false },
+            onReference = { photoDraft = it; takePhoto = false },
+            onError = { context.app.journal.report(TechnicalEvent.PHOTO_CAMERA_ERROR) })
         if(scan) Dialog(onDismissRequest={scan=false},properties=DialogProperties(usePlatformDefaultWidth=false)) { Surface { Column(Modifier.fillMaxSize().systemBarsPadding().padding(20.dp)) { Text("Наведите камеру на свой код",style=MaterialTheme.typography.headlineSmall); CodeScanner(onCode={profile(private.copy(qr=it));scan=false}, modifier=Modifier.weight(1f)); TextButton(onClick={scan=false}) {Text("Отмена")} } } }
         if(saveConfirm) AlertDialog(onDismissRequest={saveConfirm=false}, title={Text("Сохранить расписание?")},text={Text("Время: $time. Изменение заменит ближайшее запланированное срабатывание этого будильника.")},confirmButton={TextButton(onClick={saveConfirm=false;submit()}) {Text("Сохранить")}},dismissButton={TextButton(onClick={saveConfirm=false}) {Text("Отмена")}})
     }

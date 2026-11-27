@@ -3,7 +3,7 @@ package ru.podyom.core
 import kotlinx.serialization.Serializable
 
 @Serializable enum class MissionKind(val title: String) {
-    MATH("Математика"), MEMORY("Память"), TEXT("Набор текста"), SHAKE("Встряхивание"), STEPS("Шаги"), QR("QR / штрихкод")
+    MATH("Математика"), MEMORY("Память"), TEXT("Набор текста"), SHAKE("Встряхивание"), STEPS("Шаги"), QR("QR / штрихкод"), PHOTO("Фотография")
 }
 @Serializable data class MissionSpec(
     val kind: MissionKind = MissionKind.MATH,
@@ -15,6 +15,7 @@ import kotlinx.serialization.Serializable
     fun validate() {
         require(count in 1..50 && difficulty in 1..3 && grid in 2..4 && length in 2..12)
         if (kind == MissionKind.MATH) require(count <= 20)
+        if (kind == MissionKind.PHOTO) require(count == 1)
     }
 }
 /** Contains no labels, user text, codes or media URIs. Safe minimal Direct Boot payload. */
@@ -68,6 +69,7 @@ data class AlarmGroup(val id: String, val enabled: Boolean = true, val cancelBac
     val soundUri: String = "",
     val phrase: String = "Я проснулся и начинаю новый день",
     val qr: String = "",
+    val photoId: String? = null,
 )
 @Serializable enum class RunState {
     SCHEDULED, RINGING, MISSION_RUNNING, WAITING_WAKE_CHECK, WAKE_CHECK_ACTIVE,

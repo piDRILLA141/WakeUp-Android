@@ -41,8 +41,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    fun save(plan: AlarmPlan, profile: PrivateAlarm, done: () -> Unit) = action {
-        app.engine.save(plan, profile)
+    fun save(plan: AlarmPlan, profile: PrivateAlarm, photoDraft: PhotoReference? = null, done: () -> Unit) = action {
+        app.engine.save(plan, profile, photoDraft = photoDraft)
         val next = app.runtime.dao().runs().map { it.model() }.firstOrNull { it.plan.id == plan.id && it.state == RunState.SCHEDULED }
         messages.emit(if (next == null) "Будильник сохранён и выключен" else "Будильник прозвонит через ${duration(next.eventAt - System.currentTimeMillis())}")
         done()
@@ -169,7 +169,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun clearHistory() = action { app.engine.clearHistory(); app.privateDb.dao().clearSleep() }
     fun export(uri: Uri) = action {
-        val entries = app.runtime.dao().alarms().map { row -> val p = row.model(); BackupAlarm(p, app.engine.profile(p.privateKey) ?: PrivateAlarm()) }
+        val entries = app.runtime.dao().alarms().map { row -> val p = row.model(); BackupAlarm(p, (app.engine.profile(p.privateKey) ?: PrivateAlarm()).copy(photoId = null)) }
         val groupEntries = app.runtime.dao().observeGroups().first().map { row ->
             BackupGroup(row.model(), app.engine.profile(row.id)?.title ?: "Группа")
         }
@@ -197,11 +197,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 lastFiredEpochDay = null, groupSkipDays = it.plan.groupSkipDays.mapNotNull { (day, source) ->
                     imported[source]?.let { groupId -> day to groupId }
                 }.toMap(), groupId = if (it.plan.quick) null else imported[it.plan.groupId]),
-                it.profile.copy(soundUri = ""))
+                it.profile.copy(soundUri = "", photoId = null))
         }
         app.settings.deduplicate(backup.settings.deduplicate)
         app.settings.light(backup.settings.light); app.settings.clock24(backup.settings.clock24); app.settings.enhanced(backup.settings.enhancedCheck)
-        messages.emit("Импортировано ${backup.alarms.size}. Включите нужные будильники; мелодии выберите заново")
+        messages.emit("Импортировано ${backup.alarms.size}. Включите нужные будильники. Выберите файлы мелодий и снимите фотоэталоны заново")
     }
 }
 fun duration(millis: Long): String {

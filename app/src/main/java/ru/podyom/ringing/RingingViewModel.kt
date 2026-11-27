@@ -24,7 +24,30 @@ class RingingViewModel(application: Application):AndroidViewModel(application) {
 
     fun dismissQuick(id:String)=action {app.engine.update(id,WakeMachine::dismissQuick)}
     fun start(id:String)=action {app.engine.update(id,WakeMachine::startMission)}
-    fun fallback(id:String)=action {app.engine.update(id,WakeMachine::fallback)}
+    fun fallback(id: String) = action {
+        var photo = false
+        app.engine.update(id) { run, now ->
+            photo = run.state == RunState.MISSION_RUNNING && run.mission.kind == MissionKind.PHOTO
+            WakeMachine.fallback(run, now)
+        }
+        if (photo) app.journal.report(ru.podyom.data.TechnicalEvent.PHOTO_FALLBACK, id)
+    }
+    suspend fun photo(id: String?) = app.photoReferences.get(id)
+    fun cameraError(id: String) { app.journal.report(ru.podyom.data.TechnicalEvent.PHOTO_CAMERA_ERROR, id) }
+    fun photoMatched(id: String, version: Int, photoId: String?) = action {
+        if (photoId == null) return@action
+        val before = app.runtime.dao().run(id)?.model() ?: return@action
+        if (app.engine.profile(before.plan.privateKey)?.photoId != photoId) return@action
+        var accepted = false
+        app.engine.update(id) { run, now ->
+            if (run.state != RunState.MISSION_RUNNING || run.mission.kind != MissionKind.PHOTO || run.version != version) run
+            else {
+                accepted = true
+                WakeMachine.progress(run, version, now)
+            }
+        }
+        if (accepted) { message.value = ""; app.journal.report(ru.podyom.data.TechnicalEvent.PHOTO_MATCHED, id, version) }
+    }
     fun snooze(id:String)=action {app.engine.update(id,WakeMachine::snooze)}
     fun cancel(id:String)=action {app.engine.update(id) {r,t->WakeMachine.cancel(r,t,true)}}
     fun cancelCheck(key: CheckKey) = action { app.engine.cancelCheck(key) }

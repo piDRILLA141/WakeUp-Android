@@ -72,7 +72,9 @@ abstract class RuntimeDatabase : RoomDatabase() {
 }
 @Dao interface PrivateDao {
     @Query("SELECT * FROM profiles WHERE id = :id") suspend fun profile(id: String): ProfileRow?
-    @Query("SELECT * FROM profiles") fun profiles(): Flow<List<ProfileRow>>
+    @Query("SELECT * FROM profiles WHERE id NOT LIKE 'photo:%'") fun profiles(): Flow<List<ProfileRow>>
+    @Query("SELECT id FROM profiles WHERE id LIKE 'photo:%'") suspend fun photoKeys(): List<String>
+    @Query("DELETE FROM profiles WHERE id = :key AND id LIKE 'photo:%'") suspend fun deletePhoto(key: String)
     @Upsert suspend fun putProfile(row: ProfileRow)
     @Query("SELECT * FROM sleep ORDER BY started DESC") fun sleep(): Flow<List<SleepRow>>
     @Query("SELECT * FROM sleep WHERE ended = 0 LIMIT 1") suspend fun currentSleep(): SleepRow?

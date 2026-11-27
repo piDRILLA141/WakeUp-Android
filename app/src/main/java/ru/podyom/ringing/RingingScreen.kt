@@ -102,7 +102,18 @@ import java.time.format.DateTimeFormatter
                 Text("Задание ${run.missionIndex+1} из ${run.plan.missions.size} · ${run.mission.kind.title}",style=MaterialTheme.typography.titleLarge)
                 LinearProgressIndicator(progress={run.progress.toFloat()/run.mission.count},modifier=Modifier.fillMaxWidth())
                 Text("Выполнено ${run.progress} из ${run.mission.count}")
-                MissionPanel(run,private,onAnswer={vm.answer(id,run.version,it)},onMovement={vm.movement(id,run.missionIndex,run.cycle,run.mission.kind,it)},fallback={vm.fallback(id)})
+                if (run.mission.kind == MissionKind.PHOTO) {
+                    val photoId = private?.photoId
+                    val reference by produceState<ru.podyom.data.PhotoReference?>(null, photoId, unlockRevision) {
+                        value = vm.photo(photoId)
+                    }
+                    PhotoMission(reference, { vm.photoMatched(id, run.version, photoId) }, { vm.fallback(id) }, { vm.cameraError(id) })
+                } else {
+                    MissionPanel(run.mission, Missions.challengeSeed(run), private,
+                        onAnswer = { vm.answer(id, run.version, it) },
+                        onMovement = { vm.movement(id, run.missionIndex, run.cycle, run.mission.kind, it) },
+                        fallback = { vm.fallback(id) })
+                }
             }
             RunState.WAITING_WAKE_CHECK -> {Text("Проверка впереди",style=MaterialTheme.typography.headlineSmall);Text("Вернёмся через ${duration(run.eventAt-now)}. Можно закрыть приложение — проверка сохранена в системном расписании.");OutlinedButton(onClick=onClose){Text("Продолжить утро")}}
             RunState.WAKE_CHECK_ACTIVE -> {
@@ -138,9 +149,9 @@ import java.time.format.DateTimeFormatter
     )
     if(emergency) AlertDialog(onDismissRequest={emergency=false},title={Text("Завершить текущий звонок и проверки?")},text={Column {Text("Если вам плохо или задание недоступно, можно остановиться. Введите «ЗАВЕРШИТЬ». Случай сохранится в истории без штрафов.");OutlinedTextField(phrase,{phrase=it},label={Text("Подтверждение")})}},confirmButton={TextButton(onClick={if (route != null) vm.cancelCheck(route.key) else if (run?.state == RunState.WAKE_CHECK_ACTIVE) vm.cancelCheck(run.checkKey) else vm.cancel(id);emergency=false},enabled=phrase.trim()=="ЗАВЕРШИТЬ"){Text("Завершить")}},dismissButton={TextButton(onClick={emergency=false}){Text("Вернуться")}})
 }
-@Composable private fun MissionPanel(run:AlarmRun,private:PrivateAlarm?,onAnswer:(String)->Unit,onMovement:(Int)->Unit,fallback:()->Unit) {
-    val spec=run.mission;val seed=Missions.challengeSeed(run)
-    var input by rememberSaveable(run.id,seed) {mutableStateOf("")}
+@Composable internal fun MissionPanel(spec: MissionSpec, seed: Int, private: PrivateAlarm?,
+    onAnswer: (String) -> Unit, onMovement: (Int) -> Unit, fallback: () -> Unit) {
+    var input by rememberSaveable(seed) {mutableStateOf("")}
     when(spec.kind) {
         MissionKind.MATH,MissionKind.TEXT -> {
             Text(if(spec.kind==MissionKind.MATH) Missions.math(seed,spec.difficulty).text else private?.phrase?:"Разблокируйте телефон",style=MaterialTheme.typography.headlineSmall)
@@ -150,6 +161,7 @@ import java.time.format.DateTimeFormatter
         MissionKind.MEMORY -> MemoryPanel(seed,spec,onAnswer)
         MissionKind.QR -> {Text("Отсканируйте зарегистрированный код");if(private!=null) CodeScanner(onCode=onAnswer,modifier=Modifier.fillMaxWidth().height(330.dp)) else Text("Код защищён до первой разблокировки")}
         MissionKind.SHAKE,MissionKind.STEPS -> SensorMission(spec.kind,onMovement,fallback)
+        MissionKind.PHOTO -> error("Photo missions require a private reference")
     }
 }
 @Composable private fun MemoryPanel(seed:Int,spec:MissionSpec,onAnswer:(String)->Unit) {

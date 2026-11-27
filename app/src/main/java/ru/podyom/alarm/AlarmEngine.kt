@@ -122,7 +122,9 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
             }
         }
         AlarmNotifications.refreshChecks(app, after, app.hasVisibleCheckHost())
-        AlarmNotifications.cancelChecks(app, before.filter { it.id !in currentById }.map { it.id })
+        val ended = before.filter { it.id !in currentById }
+        AlarmNotifications.cancelChecks(app, ended.map { it.id })
+        if (ended.any { it.plan.missions.any { spec -> spec.kind == MissionKind.PHOTO } }) prunePhotos()
     }
     suspend fun refreshPresentation() = mutex.withLock { AlarmNotifications.refreshChecks(app, runs(), app.hasVisibleCheckHost()) }
 
@@ -180,6 +182,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
                 dao.deleteGroup(id)
             }
             reconcile(before)
+            if (plans.any { it.missions.any { mission -> mission.kind == MissionKind.PHOTO } }) prunePhotos()
         } else {
             changeMembership(plans, null) { dao.deleteGroup(id) }
         }
@@ -212,7 +215,18 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         }
     }
 
-    suspend fun save(plan: AlarmPlan, profile: PrivateAlarm, testAt: Long? = null) = mutex.withLock {
+    private suspend fun prunePhotos() {
+        if (!app.unlocked) return
+        try {
+            val used = dao.alarms().mapTo(HashSet()) { it.model().privateKey }
+            runs().mapTo(used) { it.plan.privateKey }
+            app.photoReferences.removeUnused(used)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (_: Exception) { app.journal.report(TechnicalEvent.PHOTO_STORAGE_ERROR) }
+    }
+
+    suspend fun save(plan: AlarmPlan, profile: PrivateAlarm, testAt: Long? = null,
+        photoDraft: PhotoReference? = null) = mutex.withLock {
         plan.validate()
         require(!plan.quick || plan.groupId == null) { "Быстрый будильник не входит в группу" }
         require(plan.groupId?.let { dao.group(it) != null } != false) { "Группа не найдена" }
@@ -239,12 +253,20 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
             automaticSkipDay = if (oldPlan == null) plan.automaticSkipDay else oldPlan.automaticSkipDay,
             groupSkipDays = oldPlan?.groupSkipDays ?: plan.groupSkipDays,
         )
-        app.privateDb.dao().putProfile(ProfileRow(saved.privateKey, codec.encodeToString(profile)))
         val previous = runs().firstOrNull { it.plan.id == saved.id && it.state == RunState.SCHEDULED }
         val next = if (saved.enabled && groupAllows(saved)) {
             if (testAt != null) occurrence(saved, testAt) else newOccurrence(saved, now(), zoneId())
         } else null
-        applyScheduleChanges(listOf(ScheduleChange(saved, previous, next, keepCancelled = true)))
+        val hasPhoto = saved.missions.any { it.kind == MissionKind.PHOTO }
+        val photoChanged = (hasPhoto && photoDraft != null) || oldPlan?.missions?.any { it.kind == MissionKind.PHOTO } == true
+        try {
+            val photoId = if (!hasPhoto) null else if (photoDraft != null) app.photoReferences.save(photoDraft) else profile.photoId
+            app.privateDb.dao().putProfile(ProfileRow(saved.privateKey, codec.encodeToString(profile.copy(photoId = photoId))))
+            applyScheduleChanges(listOf(ScheduleChange(saved, previous, next, keepCancelled = true)))
+            if (hasPhoto && photoDraft != null) app.journal.report(TechnicalEvent.PHOTO_REFERENCE_SAVED)
+        } finally {
+            if (photoChanged) withContext(NonCancellable) { prunePhotos() }
+        }
     }
     suspend fun duplicateLater(id: String): AlarmPlan {
         val original = mutex.withLock { dao.alarms().first { it.id == id }.model() }
@@ -454,11 +476,14 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
         changes.mapNotNull { it.previous }.forEach { app.scheduler.cancel(it) }
     }
     suspend fun delete(id: String) = mutex.withLock {
+        val hadPhoto = dao.alarms().firstOrNull { it.id == id }?.model()
+            ?.missions?.any { it.kind == MissionKind.PHOTO } == true
         val before = runs()
         db.withTransaction {
             before.filter { it.plan.id == id && !it.terminal }.forEach { put(it, WakeMachine.cancel(it, now())) }
             dao.deleteAlarm(id)
         }; reconcile(before)
+        if (hadPhoto) prunePhotos()
     }
     suspend fun skip(id: String) = mutex.withLock {
         val before = runs()
@@ -646,6 +671,7 @@ class AlarmEngine(private val app: App, private val clock: () -> Long = System::
             }
         }
         reconcile(before, restoreSystem = true, recoverSound = recoverSound)
+        prunePhotos()
         app.journal.report(TechnicalEvent.SCHEDULE_RESTORED)
     }
     suspend fun clearHistory() = mutex.withLock { db.withTransaction { dao.clearHistory(); dao.clearEvents() } }
