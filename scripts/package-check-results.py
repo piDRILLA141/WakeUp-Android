@@ -12,6 +12,7 @@ parser.add_argument("output", type=Path)
 parser.add_argument("--build-outcome", required=True)
 parser.add_argument("--build-log", type=Path, required=True)
 parser.add_argument("--emulator-outcome", default="skipped")
+parser.add_argument("--older-emulator-outcome", default="skipped")
 args = parser.parse_args()
 output = args.output
 output.mkdir(parents=True, exist_ok=True)
@@ -20,7 +21,8 @@ for source, target in (
     (Path("app/build/reports"), "app-reports"),
     (Path("core/build/test-results"), "core-test-results"),
     (Path("app/build/test-results"), "app-test-results"),
-    (Path("app/build/outputs/androidTest-results/connected"), "instrumentation-results"),
+    (Path("app/build/instrumentation-api36"), "instrumentation-api36"),
+    (Path("app/build/instrumentation-api30"), "instrumentation-api30"),
 ):
     if source.exists():
         shutil.copytree(source, output / target, dirs_exist_ok=True)
@@ -31,7 +33,8 @@ rows = []
 for label, folder in (
     ("Kotlin / JUnit", Path("core/build/test-results/test")),
     ("Android / Robolectric / Compose", Path("app/build/test-results/testDebugUnitTest")),
-    ("Android / эмулятор", Path("app/build/outputs/androidTest-results/connected")),
+    ("Android 16 / эмулятор", Path("app/build/instrumentation-api36")),
+    ("Android 11 / эмулятор", Path("app/build/instrumentation-api30")),
 ):
     suites = [ET.parse(path).getroot() for path in sorted(folder.rglob("TEST-*.xml"))]
     counts = [sum(int(suite.get(key, 0)) for suite in suites)
@@ -58,7 +61,8 @@ summary = f"""# Результаты сборки и проверок «Подъ
 """ + "".join(rows) + f"""
 {lint_summary}
 
-Результат инструментальных тестов на эмуляторе: **{args.emulator_outcome}**.
+Инструментальные тесты Android 16: **{args.emulator_outcome}**.
+Инструментальные тесты Android 11: **{args.older_emulator_outcome}**.
 
 - [Полный журнал сборки](build.log).
 - [HTML тестов ядра](core-reports/tests/test/index.html).
@@ -73,5 +77,12 @@ summary = f"""# Результаты сборки и проверок «Подъ
 Звук, блокировка экрана, Doze, Bluetooth и OriginOS на iQOO 15R требуют проверки
 на самом устройстве. Автоматические тесты не подтверждают эти сценарии.
 """
+photo_report = Path("core/build/test-results/test/TEST-ru.podyom.core.PhotoMatcherTest.xml")
+if photo_report.exists():
+    stream = ET.parse(photo_report).getroot().findtext("system-out", "")
+    metrics = [line.removeprefix("Photo metrics: ") for line in stream.splitlines() if line.startswith("Photo metrics: ")]
+    if metrics:
+        summary += "\n## Распознавание на синтетических кадрах\n\n" + "".join(f"- {line}\n" for line in metrics)
+        summary += "\nИзмерения выполнены в JVM на CI. Скорость камеры и расход памяти телефона здесь не измерялись.\n"
 (output / "RESULTS.md").write_text(summary, encoding="utf-8")
 print(summary)

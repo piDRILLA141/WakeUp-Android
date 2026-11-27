@@ -28,7 +28,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/podyom/source" "$RUNNER_TEMP/podyom/guide/docs"
           git archive --format=zip --output="$RUNNER_TEMP/podyom/source/podyom-source.zip" HEAD
-          cp README.md AGENTS.md "$RUNNER_TEMP/podyom/guide/"
+          cp README.md AGENTS.md AUDIO_LICENSES.md "$RUNNER_TEMP/podyom/guide/"
           cp docs/*.md "$RUNNER_TEMP/podyom/guide/docs/"
       - name: Upload source ZIP
         uses: actions/upload-artifact@v4
@@ -81,12 +81,12 @@ jobs:
           else
             echo "::notice::No persistent key is configured. This APK uses a disposable test certificate."
           fi
-      - name: Download published 0.4.0 APK for certificate comparison
+      - name: Download published 0.5.0 APK for certificate comparison
         continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: podyom-debug-apk
-          run-id: 45711080102
+          run-id: 45782665585
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/podyom/previous
       - name: Cache Robolectric Android 16 runtime
@@ -124,9 +124,9 @@ jobs:
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk dist/podyom-debug.apk
           ./scripts/signing-report.sh dist/podyom-debug.apk "$RUNNER_TEMP/podyom/signing" "$RUNNER_TEMP/podyom/previous/podyom-debug.apk"
-          cp docs/SMART_ALARMS_0.5.0.md "$RUNNER_TEMP/podyom/signing/"
+          cp docs/MISSIONS_0.6.0.md "$RUNNER_TEMP/podyom/signing/"
           cp "$RUNNER_TEMP/podyom/signing/SIGNING.md" dist/
-          cp docs/SMART_ALARMS_0.5.0.md dist/
+          cp docs/MISSIONS_0.6.0.md dist/
           cd dist
           sha256sum podyom-debug.apk > SHA256SUMS
       - name: Upload installable debug APK
@@ -168,7 +168,7 @@ jobs:
         run: |
           bash scripts/run-instrumentation.sh 36
       - name: Run Android 11 instrumentation
-        if: ${{ !cancelled() && steps.emulator.outputs.available == 'true' && inputs.test_older_android }}
+        if: ${{ !cancelled() && steps.emulator.outputs.available == 'true' && (inputs.test_older_android || (github.event_name == 'push' && github.ref == 'refs/heads/build/downloadable-debug-apk')) }}
         id: older_instrumentation
         timeout-minutes: 12
         env:
@@ -178,13 +178,28 @@ jobs:
         run: |
           timeout 30s adb -s emulator-5554 wait-for-disconnect || true
           bash scripts/run-instrumentation.sh 30
+      - name: Check generated screenshots
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        run: |
+          for screen in home-small groups-expanded editor-small-large-font mission-settings photo-mission-permission melodies ringing ringing-task wake-check-activity settings diagnostics sleep practice; do
+            test -s "app/build/reports/screenshots/$screen.png"
+          done
+      - name: Upload synthetic screenshots
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: podyom-screenshots
+          path: app/build/reports/screenshots/*.png
+          if-no-files-found: error
+          retention-days: 30
       - name: Prepare verification reports
         if: always()
         env:
           BUILD_OUTCOME: ${{ steps.binaries.outcome == 'success' && steps.tests.outcome || steps.binaries.outcome }}
           EMULATOR_OUTCOME: ${{ steps.instrumentation.outcome }}
+          OLDER_EMULATOR_OUTCOME: ${{ steps.older_instrumentation.outcome }}
         run: |
-          python3 scripts/package-check-results.py "$RUNNER_TEMP/podyom/results" --build-outcome "$BUILD_OUTCOME" --build-log "$RUNNER_TEMP/podyom-build.log" --emulator-outcome "$EMULATOR_OUTCOME"
+          python3 scripts/package-check-results.py "$RUNNER_TEMP/podyom/results" --build-outcome "$BUILD_OUTCOME" --build-log "$RUNNER_TEMP/podyom-build.log" --emulator-outcome "$EMULATOR_OUTCOME" --older-emulator-outcome "$OLDER_EMULATOR_OUTCOME"
           if [ -f app/build/reports/lint-results-debug.xml ]; then
             python3 - <<'PY'
           import collections

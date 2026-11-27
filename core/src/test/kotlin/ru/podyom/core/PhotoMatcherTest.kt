@@ -49,7 +49,9 @@ class PhotoMatcherTest {
 
     @Test fun acceptsReferenceAndModerateGeometricAndLightChangesAndRejectsUnrelatedFixtures() {
         val first = scene(1)
+        val start = System.nanoTime()
         val reference = requireNotNull(PhotoMatcher.extract(first).template)
+        println("Photo metrics: first extraction ${(System.nanoTime() - start) / 1_000_000} ms, ${reference.points.size} points, ${first.luma.size} luma bytes")
         val cases = listOf(
             transform(first, .15, 1.0, .0, .82),
             transform(first, -.18, 1.21, .021, 1.04),
@@ -57,8 +59,10 @@ class PhotoMatcherTest {
         )
         assertTrue(PhotoMatcher.compare(reference, reference).accepted)
         cases.forEachIndexed { index, sample ->
-            val observed = PhotoMatcher.compare(reference, requireNotNull(PhotoMatcher.extract(sample).template))
-            println("Photo fixture $index: ${observed.inliers} geometric inliers")
+            val prepared = requireNotNull(PhotoMatcher.extract(sample).template)
+            val compareStart = System.nanoTime()
+            val observed = PhotoMatcher.compare(reference, prepared)
+            println("Photo metrics: positive $index, ${observed.inliers} geometric inliers, ${(System.nanoTime() - compareStart) / 1_000_000} ms comparison")
             assertTrue("Positive synthetic fixture $index: $observed", observed.accepted)
         }
         for (seed in 2L..7L) {

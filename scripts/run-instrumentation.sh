@@ -28,6 +28,10 @@ if [[ "$api_level" == 30 ]]; then
   adb shell wm size 720x1280
   adb shell wm density 320
 fi
-./gradlew :app:connectedDebugAndroidTest --console=plain
-mkdir -p "app/build/instrumentation-api$api_level"
-cp -r app/build/outputs/androidTest-results/connected/. "app/build/instrumentation-api$api_level/"
+gradle_status=0
+./gradlew :app:connectedDebugAndroidTest --console=plain || gradle_status=$?
+if [[ -d app/build/outputs/androidTest-results/connected ]]; then
+  mkdir -p "app/build/instrumentation-api$api_level"
+  cp -r app/build/outputs/androidTest-results/connected/. "app/build/instrumentation-api$api_level/"
+fi
+exit "$gradle_status"

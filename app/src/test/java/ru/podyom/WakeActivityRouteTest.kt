@@ -49,6 +49,21 @@ class WakeActivityRouteTest {
         }
     }
 
+    @Test fun ringingAndTaskScreensAreCapturedWithSyntheticState() {
+        val app = RuntimeEnvironment.getApplication() as App
+        val now = System.currentTimeMillis()
+        val run = AlarmRun("screen-ring", AlarmPlan("screen-plan"), now, state = RunState.RINGING, firedAt = now)
+        runBlocking { app.runtime.dao().putRun(run.row()) }
+        val intent = Intent(app, RingingActivity::class.java).putExtra("runId", run.id)
+        Robolectric.buildActivity(RingingActivity::class.java, intent).setup().use { activity ->
+            waitForText("Начать задание")
+            compose.runOnIdle { saveScreenshot(activity.get().window.decorView, "ringing") }
+            compose.onNodeWithText("Начать задание").performClick()
+            waitForText("Проверить")
+            compose.runOnIdle { saveScreenshot(activity.get().window.decorView, "ringing-task") }
+        }
+    }
+
     @Test fun tappingNotificationOpensItsCheckAfterRecreationAndUsesTheNextIntent() {
         val app = RuntimeEnvironment.getApplication() as App
         val first = storedCheck(app, System.currentTimeMillis() + 120_000)
@@ -58,6 +73,7 @@ class WakeActivityRouteTest {
         assertEquals(first.deadline, runBlocking { app.engine.snapshot().first { it.id == first.id }.deadline })
         Robolectric.buildActivity(RingingActivity::class.java, firstIntent).setup().use { activity ->
             waitForText("ДА, Я ПРОСНУЛСЯ")
+            compose.runOnIdle { saveScreenshot(activity.get().window.decorView, "wake-check-activity") }
             activity.recreate()
             waitForText("ДА, Я ПРОСНУЛСЯ")
             val secondIntent = pendingIntent(app, second)

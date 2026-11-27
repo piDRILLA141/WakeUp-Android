@@ -18,6 +18,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -25,6 +26,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import ru.podyom.wakecheck.CheckRoute
 import kotlinx.coroutines.delay
 import ru.podyom.BuildConfig
+import ru.podyom.app
 import ru.podyom.core.*
 import ru.podyom.data.*
 import ru.podyom.permissions.Readiness
@@ -112,7 +114,7 @@ import java.util.UUID
     }, bottomBar = {
         NavigationBar { tabs.forEachIndexed { i, title -> NavigationBarItem(selected = tab == i, onClick = { if (!busy) { tab = i; if (i != 0) selectedIds = emptyList() } }, icon = { Icon(icons[i], title) }, label = { Text(title, fontSize = 11.sp) }) } }
     }, floatingActionButton = { if (tab == 0 && !readiness && !selecting) FloatingActionButton(onClick = { editor = "new" }) { Icon(Icons.Outlined.Add, "Создать будильник") } }) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding).imePadding(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        LazyColumn(Modifier.fillMaxSize().padding(padding).imePadding().testTag("home-content"), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             if (readiness) {
                 item { Readiness() }
                 item { ru.podyom.permissions.ScheduleDiagnostics(runs, rows) }
@@ -274,7 +276,7 @@ import java.util.UUID
                     if(BuildConfig.DEBUG) item { OutlinedButton(onClick = { vm.test(true) }, modifier = Modifier.fillMaxWidth()) { Text("Тест Wake Up Check · 10 / 10 секунд") } }
                     item { OutlinedButton(onClick = { export.launch("podyom-backup.json") }, modifier = Modifier.fillMaxWidth()) { Text("Экспорт будильников") }; OutlinedButton(onClick = { import.launch(arrayOf("application/json", "text/plain")) }, modifier = Modifier.fillMaxWidth()) { Text("Импорт будильников") }; Text("Импорт добавляет выключенные копии. Файлы мелодий и фотоэталоны нужно выбрать заново.", style = MaterialTheme.typography.bodySmall) }
                     item { TextButton(onClick = { confirm = "Удалить историю пробуждений и сна? Активные события сохранятся." to vm::clearHistory }) { Text("Очистить историю") } }
-                    item { Text("Подъём ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.titleLarge); Text("Бесплатно. Без рекламы, аккаунтов и интернета.\nФотозадание, приседания и анализ звуков сна не включены: для них ещё нужна проверенная реализация.", style = MaterialTheme.typography.bodySmall) }
+                    item { Text("Подъём ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.titleLarge); Text("Бесплатно. Без рекламы, аккаунтов и интернета.\nФотоэталоны хранятся на телефоне. Приседания и анализ звуков сна отложены.", style = MaterialTheme.typography.bodySmall) }
                 }
             }
         }
