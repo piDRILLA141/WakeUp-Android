@@ -4,6 +4,14 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      fast_checks:
+        description: 'Run JVM tests and build without emulators'
+        type: boolean
+        default: false
+      test_older_android:
+        description: 'Also test Android 11 with small screen and large font'
+        type: boolean
+        default: false
       require_persistent_signing:
         description: 'Require a configured persistent signing key'
         type: boolean
@@ -20,7 +28,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/podyom/source" "$RUNNER_TEMP/podyom/guide/docs"
           git archive --format=zip --output="$RUNNER_TEMP/podyom/source/podyom-source.zip" HEAD
-          cp README.md "$RUNNER_TEMP/podyom/guide/"
+          cp README.md AGENTS.md "$RUNNER_TEMP/podyom/guide/"
           cp docs/*.md "$RUNNER_TEMP/podyom/guide/docs/"
       - name: Upload source ZIP
         uses: actions/upload-artifact@v4
@@ -140,7 +148,7 @@ jobs:
           set -o pipefail
           ./gradlew :core:test :app:testDebugUnitTest --console=plain 2>&1 | tee -a "$RUNNER_TEMP/podyom-build.log"
       - name: Check emulator availability
-        if: ${{ !cancelled() && steps.binaries.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.binaries.outcome == 'success' && !inputs.fast_checks }}
         id: emulator
         run: |
           if [ -c /dev/kvm ]; then
@@ -158,28 +166,18 @@ jobs:
           PODYOM_KEY_ALIAS: ${{ secrets.PODYOM_KEY_ALIAS }}
           PODYOM_KEY_PASSWORD: ${{ secrets.PODYOM_KEY_PASSWORD }}
         run: |
-          set -euo pipefail
-          image='system-images;android-36;google_apis;x86_64'
-          sdkmanager emulator "$image"
-          export ANDROID_AVD_HOME="$RUNNER_TEMP/podyom-avd"
-          mkdir -p "$ANDROID_AVD_HOME"
-          printf 'no\n' | avdmanager create avd --name podyom-api36 --package "$image" --path "$ANDROID_AVD_HOME/podyom-api36.avd" --force
-          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -qx podyom-api36
-          "$ANDROID_HOME/emulator/emulator" -accel-check
-          "$ANDROID_HOME/emulator/emulator" -avd podyom-api36 -no-window -no-audio -no-snapshot \
-            -gpu software -feature -Vulkan -no-boot-anim > "$RUNNER_TEMP/podyom-emulator.log" 2>&1 &
-          emulator_pid=$!
-          cleanup() {
-            status=$?
-            if [ "$status" -ne 0 ]; then tail -100 "$RUNNER_TEMP/podyom-emulator.log"; fi
-            adb emu kill || kill "$emulator_pid" || true
-          }
-          trap cleanup EXIT
-          timeout 150s bash -c 'until adb get-state 2>/dev/null | grep -qx device; do kill -0 "$1" || exit 1; sleep 2; done' _ "$emulator_pid"
-          timeout 210s bash -c 'until [ "$(adb shell getprop sys.boot_completed | tr -d "\r")" = 1 ]; do sleep 2; done'
-          adb shell input keyevent KEYCODE_WAKEUP
-          adb shell wm dismiss-keyguard
-          ./gradlew :app:connectedDebugAndroidTest --console=plain
+          bash scripts/run-instrumentation.sh 36
+      - name: Run Android 11 instrumentation
+        if: ${{ !cancelled() && steps.emulator.outputs.available == 'true' && inputs.test_older_android }}
+        id: older_instrumentation
+        timeout-minutes: 12
+        env:
+          PODYOM_KEYSTORE_PASSWORD: ${{ secrets.PODYOM_KEYSTORE_PASSWORD }}
+          PODYOM_KEY_ALIAS: ${{ secrets.PODYOM_KEY_ALIAS }}
+          PODYOM_KEY_PASSWORD: ${{ secrets.PODYOM_KEY_PASSWORD }}
+        run: |
+          timeout 30s adb -s emulator-5554 wait-for-disconnect || true
+          bash scripts/run-instrumentation.sh 30
       - name: Prepare verification reports
         if: always()
         env:
@@ -200,9 +198,12 @@ jobs:
             cp -r app/schemas "$RUNNER_TEMP/podyom/results/"
             python3 -c 'import json; print("Room 3 identity: " + json.load(open("app/schemas/ru.podyom.data.RuntimeDatabase/3.json"))["database"]["identityHash"])'
           fi
-          if [ -f "$RUNNER_TEMP/podyom-emulator.log" ]; then
-            cp "$RUNNER_TEMP/podyom-emulator.log" "$RUNNER_TEMP/podyom/results/"
-          fi
+          for emulator_log in "$RUNNER_TEMP"/podyom-emulator-*.log; do
+            if [ -f "$emulator_log" ]; then cp "$emulator_log" "$RUNNER_TEMP/podyom/results/"; fi
+          done
+          for test_report in app/build/instrumentation-api*; do
+            if [ -d "$test_report" ]; then cp -r "$test_report" "$RUNNER_TEMP/podyom/results/"; fi
+          done
           if [ -d "$RUNNER_TEMP/podyom/signing" ]; then
             cp -r "$RUNNER_TEMP/podyom/signing" "$RUNNER_TEMP/podyom/results/"
           fi
